@@ -67,10 +67,22 @@ class ConversationMessage:
 class ClaudeAgent:
     """Enhanced agent with compact and autocompact functionality.
 
-    Wraps MAF's ChatAgent and adds:
-    - compact(): Summarize conversation history
-    - autocompact: Automatically compact when threshold is reached
-    - Token usage estimation
+    Wraps MAF's ChatAgent to provide Claude Code CLI integration.
+
+    MAF-Standard Methods:
+        - run(message): Send a message and get a response
+        - run_stream(message): Stream a response token by token
+        - name: Agent name
+        - instructions: Agent instructions
+
+    Extension Methods (Claude Code Provider specific):
+        - compact(): Summarize conversation history to reduce context
+        - get_usage(): Get accumulated token usage statistics
+        - get_context_info(): Get context usage details and limits
+        - get_messages(): Get conversation history
+        - get_token_estimate(): Estimate current token count
+        - reset(): Reset conversation state
+        - reset_usage(): Reset usage statistics
 
     Example:
         ```python
@@ -78,16 +90,19 @@ class ClaudeAgent:
         agent = client.create_agent(
             name="assistant",
             instructions="You are helpful.",
-            autocompact=True,  # Enable autocompact
-            autocompact_threshold=50_000,  # Tokens
+            autocompact=True,  # Enabled by default
+            autocompact_threshold=100_000,
         )
 
-        # Use normally - autocompact happens automatically
+        # MAF-standard usage
         response = await agent.run("Hello!")
 
-        # Or manually compact
+        # Extension: check usage
+        usage = agent.get_usage()
+        print(f"Tokens used: {usage.total_tokens}")
+
+        # Extension: manual compact
         result = await agent.compact()
-        print(f"Reduced from {result.original_tokens_estimate} to {result.summary_tokens_estimate} tokens")
         ```
     """
 
