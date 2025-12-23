@@ -686,6 +686,442 @@ class TestIntegration:
 
 
 # =============================================================================
+# NEW FEATURE TESTS
+# =============================================================================
+
+class TestMCP:
+    """Test MCP server connections."""
+
+    def test_mcp_server_creation(self):
+        """Test MCPServer creation."""
+        from claude_code_provider import MCPServer, MCPTransport
+
+        server = MCPServer(
+            name="test-server",
+            command_or_url="npx",
+            transport=MCPTransport.STDIO,
+            args=["-y", "test-mcp"],
+            env={"API_KEY": "secret"},
+        )
+        assert server.name == "test-server"
+        assert server.transport == MCPTransport.STDIO
+        assert server.args == ["-y", "test-mcp"]
+
+    def test_mcp_server_to_cli_args(self):
+        """Test MCPServer CLI args generation."""
+        from claude_code_provider import MCPServer, MCPTransport
+
+        server = MCPServer(
+            name="test",
+            command_or_url="npx",
+            transport=MCPTransport.STDIO,
+        )
+        args = server.to_cli_args()
+        assert "--mcp-config" in args
+        assert len(args) == 2
+
+    def test_mcp_server_to_dict(self):
+        """Test MCPServer serialization."""
+        from claude_code_provider import MCPServer, MCPTransport
+
+        server = MCPServer(name="test", command_or_url="http://example.com", transport=MCPTransport.HTTP)
+        d = server.to_dict()
+        assert d["name"] == "test"
+        assert d["transport"] == "http"
+
+    def test_mcp_server_from_dict(self):
+        """Test MCPServer deserialization."""
+        from claude_code_provider import MCPServer
+
+        data = {"name": "test", "command_or_url": "npx", "transport": "stdio", "args": [], "env": {}}
+        server = MCPServer.from_dict(data)
+        assert server.name == "test"
+
+    def test_mcp_manager_add_remove(self):
+        """Test MCPManager add/remove operations."""
+        from claude_code_provider import MCPManager, MCPServer
+
+        manager = MCPManager()
+        server = MCPServer(name="test", command_or_url="npx")
+
+        manager.add_server(server)
+        assert manager.get_server("test") is not None
+        assert len(manager.get_servers()) == 1
+
+        result = manager.remove_server("test")
+        assert result is True
+        assert manager.get_server("test") is None
+
+    def test_mcp_manager_get_cli_args(self):
+        """Test MCPManager CLI args generation."""
+        from claude_code_provider import MCPManager, MCPServer
+
+        manager = MCPManager()
+        manager.add_server(MCPServer(name="s1", command_or_url="cmd1"))
+        manager.add_server(MCPServer(name="s2", command_or_url="cmd2"))
+
+        args = manager.get_cli_args()
+        assert args.count("--mcp-config") == 2
+
+
+class TestCostTracking:
+    """Test cost tracking."""
+
+    def test_cost_tracker_creation(self):
+        """Test CostTracker creation."""
+        from claude_code_provider import CostTracker
+
+        tracker = CostTracker()
+        assert tracker is not None
+
+    def test_cost_calculation(self):
+        """Test cost calculation."""
+        from claude_code_provider import CostTracker
+
+        tracker = CostTracker()
+        input_cost, output_cost, total = tracker.calculate_cost(
+            model="sonnet",
+            input_tokens=1000,
+            output_tokens=500,
+        )
+        assert input_cost > 0
+        assert output_cost > 0
+        assert total == input_cost + output_cost
+
+    def test_record_request(self):
+        """Test request recording."""
+        from claude_code_provider import CostTracker
+
+        tracker = CostTracker()
+        cost = tracker.record_request(
+            model="haiku",
+            input_tokens=100,
+            output_tokens=50,
+        )
+        assert cost.input_tokens == 100
+        assert cost.output_tokens == 50
+        assert cost.total_cost > 0
+
+    def test_get_summary(self):
+        """Test cost summary."""
+        from claude_code_provider import CostTracker
+
+        tracker = CostTracker()
+        tracker.record_request("sonnet", 100, 50)
+        tracker.record_request("sonnet", 200, 100)
+
+        summary = tracker.get_summary()
+        assert summary.total_requests == 2
+        assert summary.total_input_tokens == 300
+        assert summary.total_output_tokens == 150
+
+    def test_budget_tracking(self):
+        """Test budget tracking."""
+        from claude_code_provider import CostTracker
+
+        tracker = CostTracker()
+        tracker.set_budget(max_cost=0.01)
+
+        # Record small request
+        tracker.record_request("haiku", 100, 50)
+        assert not tracker.is_over_budget()
+
+        # Record large request
+        tracker.record_request("opus", 1000000, 500000)
+        assert tracker.is_over_budget()
+
+    def test_reset_tracker(self):
+        """Test tracker reset."""
+        from claude_code_provider import CostTracker
+
+        tracker = CostTracker()
+        tracker.record_request("sonnet", 100, 50)
+        assert len(tracker.get_requests()) == 1
+
+        tracker.reset()
+        assert len(tracker.get_requests()) == 0
+
+
+class TestModelRouting:
+    """Test model routing."""
+
+    def test_simple_router(self):
+        """Test SimpleRouter."""
+        from claude_code_provider import SimpleRouter, RoutingContext
+
+        router = SimpleRouter(model="opus")
+        context = RoutingContext(prompt="Hello")
+        assert router.select_model(context) == "opus"
+
+    def test_complexity_router_simple(self):
+        """Test ComplexityRouter with simple prompt."""
+        from claude_code_provider import ComplexityRouter, RoutingContext
+
+        router = ComplexityRouter()
+        context = RoutingContext(prompt="Hi")
+        model = router.select_model(context)
+        assert model in ("haiku", "sonnet")  # Simple prompt
+
+    def test_complexity_router_complex(self):
+        """Test ComplexityRouter with complex prompt."""
+        from claude_code_provider import ComplexityRouter, RoutingContext
+
+        router = ComplexityRouter()
+        context = RoutingContext(
+            prompt="Please analyze and debug this complex algorithm step by step",
+            has_complex_reasoning=True,
+        )
+        model = router.select_model(context)
+        assert model in ("sonnet", "opus")
+
+    def test_task_type_router(self):
+        """Test TaskTypeRouter."""
+        from claude_code_provider import TaskTypeRouter, RoutingContext
+
+        router = TaskTypeRouter()
+
+        # Simple task
+        ctx1 = RoutingContext(prompt="Summarize this text")
+        assert router.select_model(ctx1) == "haiku"
+
+        # Complex task
+        ctx2 = RoutingContext(prompt="Design a new architecture for this system")
+        assert router.select_model(ctx2) == "opus"
+
+    def test_model_router_main(self):
+        """Test ModelRouter."""
+        from claude_code_provider import ModelRouter, ComplexityRouter
+
+        router = ModelRouter()
+        router.set_strategy(ComplexityRouter())
+
+        model = router.route("Simple question?")
+        assert model in ("haiku", "sonnet", "opus")
+
+    def test_cost_optimized_router(self):
+        """Test CostOptimizedRouter."""
+        from claude_code_provider import CostOptimizedRouter, RoutingContext
+
+        router = CostOptimizedRouter(budget_remaining=0.001)
+        context = RoutingContext(prompt="Any prompt")
+        model = router.select_model(context)
+        assert model == "haiku"  # Budget constrained
+
+
+class TestLogging:
+    """Test logging utilities."""
+
+    def test_debug_logger_creation(self):
+        """Test DebugLogger creation."""
+        from claude_code_provider import DebugLogger
+
+        logger = DebugLogger()
+        assert logger is not None
+
+    def test_setup_logging(self):
+        """Test setup_logging function."""
+        from claude_code_provider import setup_logging
+
+        logger = setup_logging(level="DEBUG")
+        assert logger is not None
+
+    def test_log_entry(self):
+        """Test LogEntry creation."""
+        from claude_code_provider._logging import LogEntry, LogLevel
+
+        entry = LogEntry(
+            level=LogLevel.INFO,
+            message="Test message",
+            context={"key": "value"},
+        )
+        assert entry.message == "Test message"
+
+        d = entry.to_dict()
+        assert d["level"] == "INFO"
+        assert d["context"]["key"] == "value"
+
+    def test_capture_logs(self):
+        """Test log capture."""
+        from claude_code_provider import DebugLogger
+
+        logger = DebugLogger()
+        logger.start_capture()
+
+        logger.info("Test message")
+        logger.debug("Debug message")
+
+        entries = logger.stop_capture()
+        assert len(entries) >= 1
+
+
+class TestSessionManagement:
+    """Test session management."""
+
+    def test_session_info_creation(self):
+        """Test SessionInfo creation."""
+        from claude_code_provider import SessionInfo
+
+        info = SessionInfo(session_id="test-123", model="sonnet")
+        assert info.session_id == "test-123"
+        assert info.model == "sonnet"
+
+    def test_session_info_serialization(self):
+        """Test SessionInfo serialization."""
+        from claude_code_provider import SessionInfo
+
+        info = SessionInfo(session_id="test", model="haiku")
+        d = info.to_dict()
+        assert d["session_id"] == "test"
+        assert d["model"] == "haiku"
+
+    def test_session_manager_track(self):
+        """Test SessionManager tracking."""
+        from claude_code_provider import SessionManager
+        import tempfile
+        import os
+
+        # Use temp file for storage
+        with tempfile.NamedTemporaryFile(suffix=".json", delete=False) as f:
+            temp_path = f.name
+
+        try:
+            manager = SessionManager(storage_path=temp_path)
+
+            info = manager.track_session("session-1", model="sonnet")
+            assert info.session_id == "session-1"
+            assert info.message_count == 0
+
+            # Track again increments count
+            info2 = manager.track_session("session-1")
+            assert info2.message_count == 1
+
+        finally:
+            os.unlink(temp_path)
+
+    def test_session_manager_list(self):
+        """Test SessionManager listing."""
+        from claude_code_provider import SessionManager
+        import tempfile
+        import os
+
+        with tempfile.NamedTemporaryFile(suffix=".json", delete=False) as f:
+            temp_path = f.name
+
+        try:
+            manager = SessionManager(storage_path=temp_path)
+            manager.track_session("s1")
+            manager.track_session("s2")
+            manager.track_session("s3")
+
+            sessions = manager.list_sessions()
+            assert len(sessions) == 3
+
+        finally:
+            os.unlink(temp_path)
+
+    def test_session_manager_delete(self):
+        """Test SessionManager delete."""
+        from claude_code_provider import SessionManager
+        import tempfile
+        import os
+
+        with tempfile.NamedTemporaryFile(suffix=".json", delete=False) as f:
+            temp_path = f.name
+
+        try:
+            manager = SessionManager(storage_path=temp_path)
+            manager.track_session("s1")
+
+            result = manager.delete_session("s1")
+            assert result is True
+            assert manager.get_session("s1") is None
+
+        finally:
+            os.unlink(temp_path)
+
+    def test_session_stats(self):
+        """Test session statistics."""
+        from claude_code_provider import SessionManager
+        import tempfile
+        import os
+
+        with tempfile.NamedTemporaryFile(suffix=".json", delete=False) as f:
+            temp_path = f.name
+
+        try:
+            manager = SessionManager(storage_path=temp_path)
+            manager.track_session("s1", model="sonnet")
+            manager.track_session("s2", model="haiku")
+
+            stats = manager.get_stats()
+            assert stats["total_sessions"] == 2
+            assert "sonnet" in stats["models_used"]
+            assert "haiku" in stats["models_used"]
+
+        finally:
+            os.unlink(temp_path)
+
+
+class TestBatchProcessing:
+    """Test batch processing."""
+
+    def test_batch_item_creation(self):
+        """Test BatchItem creation."""
+        from claude_code_provider import BatchItem, BatchStatus
+
+        item = BatchItem(id="item-1", prompt="Test prompt")
+        assert item.id == "item-1"
+        assert item.status == BatchStatus.PENDING
+
+    def test_batch_result_properties(self):
+        """Test BatchResult properties."""
+        from claude_code_provider import BatchResult, BatchItem, BatchStatus
+
+        items = [
+            BatchItem(id="1", prompt="p1", status=BatchStatus.COMPLETED, result="r1"),
+            BatchItem(id="2", prompt="p2", status=BatchStatus.COMPLETED, result="r2"),
+            BatchItem(id="3", prompt="p3", status=BatchStatus.FAILED, error="error"),
+        ]
+        result = BatchResult(batch_id="batch-1", items=items)
+
+        assert result.total_items == 3
+        assert result.successful_items == 2
+        assert result.failed_items == 1
+        assert result.success_rate == 2/3
+        assert result.is_complete is True
+
+    def test_batch_result_get_results(self):
+        """Test BatchResult get_results methods."""
+        from claude_code_provider import BatchResult, BatchItem, BatchStatus
+
+        items = [
+            BatchItem(id="1", prompt="p1", status=BatchStatus.COMPLETED, result="r1"),
+            BatchItem(id="2", prompt="p2", status=BatchStatus.FAILED),
+            BatchItem(id="3", prompt="p3", status=BatchStatus.COMPLETED, result="r3"),
+        ]
+        result = BatchResult(batch_id="batch-1", items=items)
+
+        all_results = result.get_results()
+        assert len(all_results) == 3
+        assert all_results[1] is None
+
+        successful = result.get_successful_results()
+        assert len(successful) == 2
+        assert "r1" in successful
+        assert "r3" in successful
+
+    def test_batch_processor_creation(self):
+        """Test BatchProcessor creation."""
+        from claude_code_provider import BatchProcessor, ClaudeCodeClient
+
+        client = ClaudeCodeClient(model="haiku")
+        processor = BatchProcessor(client, default_concurrency=5)
+
+        assert processor.default_concurrency == 5
+        assert processor.retry_failed is True
+
+
+# =============================================================================
 # TEST RUNNER
 # =============================================================================
 
@@ -702,6 +1138,12 @@ def run_unit_tests():
         TestResponseParser,
         TestCLIExecutor,
         TestRetry,
+        TestMCP,
+        TestCostTracking,
+        TestModelRouting,
+        TestLogging,
+        TestSessionManagement,
+        TestBatchProcessing,
     ]
 
     passed = 0

@@ -5,11 +5,7 @@ Use Claude Code CLI as a provider for Microsoft Agent Framework (MAF), enabling 
 ## Installation
 
 ```bash
-# From the swarm directory
 pip install -e ~/claude-code-provider/
-
-# Or install dependencies manually
-pip install pydantic>=2.0
 ```
 
 **Prerequisites:**
@@ -24,14 +20,7 @@ import asyncio
 from claude_code_provider import ClaudeCodeClient
 
 async def main():
-    # Create client
     client = ClaudeCodeClient(model="sonnet")
-
-    # Simple query
-    response = await client.get_response("What is 2+2?")
-    print(response.messages[0].text)
-
-    # Create agent with instructions
     agent = client.create_agent(
         name="coder",
         instructions="You are a helpful coding assistant.",
@@ -48,7 +37,11 @@ asyncio.run(main())
 - **Streaming** - Real-time response streaming
 - **Conversation memory** - Session-based continuity
 - **Autocompact** - Automatic context management to prevent overflow
-- **Usage tracking** - Token usage and context monitoring
+- **MCP Server Connections** - Connect external tools via Model Context Protocol
+- **Cost Tracking** - Monitor token usage and estimated costs
+- **Multi-Model Routing** - Route tasks to optimal models based on complexity
+- **Session Management** - Track, export, and cleanup sessions
+- **Batch Processing** - Process multiple prompts efficiently
 - **Resilience** - Retry logic, circuit breaker, configurable timeouts
 - **MAF compatible** - Full MAF ChatAgent API compatibility
 
@@ -69,7 +62,6 @@ client = ClaudeCodeClient(
 ## Agent Creation
 
 ```python
-# Create agent with autocompact (default: enabled)
 agent = client.create_agent(
     name="assistant",
     instructions="You are a helpful assistant.",
@@ -79,124 +71,274 @@ agent = client.create_agent(
 )
 ```
 
+---
+
+## MCP Server Connections
+
+Connect external tools via Model Context Protocol.
+
+```python
+from claude_code_provider import MCPServer, MCPTransport, MCPManager
+
+# Create MCP server configuration
+server = MCPServer(
+    name="my-tool",
+    command_or_url="npx",
+    transport=MCPTransport.STDIO,
+    args=["-y", "my-mcp-server"],
+    env={"API_KEY": "secret"},
+)
+
+# Use MCP Manager
+manager = MCPManager()
+manager.add_server(server)
+
+# Get CLI args to pass to client
+cli_args = manager.get_cli_args()
+
+# Or add server directly to Claude Code
+await manager.add_server_to_claude(server)
+
+# List configured servers
+servers = await manager.list_configured_servers()
+```
+
+**Transport Types:**
+- `MCPTransport.STDIO` - Local command execution
+- `MCPTransport.HTTP` - HTTP-based server
+- `MCPTransport.SSE` - Server-Sent Events
+
+---
+
+## Cost Tracking
+
+Monitor token usage and estimated costs.
+
+```python
+from claude_code_provider import CostTracker
+
+tracker = CostTracker()
+
+# Record a request
+cost = tracker.record_request(
+    model="sonnet",
+    input_tokens=1000,
+    output_tokens=500,
+)
+print(f"Request cost: ${cost.total_cost:.4f}")
+
+# Get summary
+summary = tracker.get_summary()
+print(f"Total spent: ${summary.total_cost:.4f}")
+print(f"Total requests: {summary.total_requests}")
+print(f"By model: {summary.by_model}")
+
+# Set budget with alert
+def budget_alert(summary):
+    print(f"Over budget! Total: ${summary.total_cost:.2f}")
+
+tracker.set_budget(max_cost=10.0, alert_callback=budget_alert)
+
+# Check budget status
+if tracker.is_over_budget():
+    print("Budget exceeded!")
+print(f"Remaining: ${tracker.get_remaining_budget():.2f}")
+```
+
+---
+
+## Multi-Model Routing
+
+Route tasks to optimal models based on complexity, cost, or custom rules.
+
+```python
+from claude_code_provider import (
+    ModelRouter, ComplexityRouter, CostOptimizedRouter,
+    TaskTypeRouter, CustomRouter, RoutingContext
+)
+
+# Complexity-based routing (default)
+router = ModelRouter()
+router.set_strategy(ComplexityRouter())
+
+model = router.route("Simple question?")  # -> haiku
+model = router.route("Analyze this complex algorithm step by step")  # -> sonnet/opus
+
+# Cost-optimized routing
+router.set_strategy(CostOptimizedRouter(budget_remaining=5.0))
+
+# Task-type routing
+router.set_strategy(TaskTypeRouter())
+model = router.route("Summarize this text")  # -> haiku
+model = router.route("Design a new architecture")  # -> opus
+
+# Custom routing
+def my_router(context: RoutingContext) -> str:
+    if "urgent" in context.prompt.lower():
+        return "opus"
+    return "sonnet"
+
+router.set_strategy(CustomRouter(my_router))
+```
+
+---
+
+## Logging & Debugging
+
+Structured logging for troubleshooting.
+
+```python
+from claude_code_provider import setup_logging, DebugLogger
+
+# Quick setup
+logger = setup_logging(level="DEBUG", json_output=False)
+
+# Or detailed setup
+logger = DebugLogger.setup(
+    level="DEBUG",
+    json_output=True,  # Structured JSON logs
+    include_time=True,
+)
+
+# Log with context
+logger.info("Request started", model="sonnet", tokens=500)
+logger.debug_cli_call(["claude", "-p", "hello"], {"timeout": 30})
+logger.debug_response({"result": "Hello!", "usage": {"input_tokens": 10}})
+
+# Capture logs for testing
+logger.start_capture()
+# ... operations ...
+entries = logger.stop_capture()
+```
+
+---
+
+## Session Management
+
+Track, export, and cleanup conversation sessions.
+
+```python
+from claude_code_provider import SessionManager
+
+manager = SessionManager()
+
+# Track a session
+info = manager.track_session("session-123", model="sonnet")
+print(f"Session: {info.session_id}, Messages: {info.message_count}")
+
+# List sessions
+sessions = manager.list_sessions(sort_by="last_used")
+for s in sessions:
+    print(f"{s.session_id}: {s.message_count} messages")
+
+# Get recent sessions
+recent = manager.get_recent_sessions(limit=5)
+
+# Get statistics
+stats = manager.get_stats()
+print(f"Total sessions: {stats['total_sessions']}")
+print(f"Models used: {stats['models_used']}")
+
+# Export a session
+export = await manager.export_session("session-123")
+export.save("session_backup.json")
+
+# Cleanup old sessions
+deleted = await manager.cleanup_old_sessions(days=30)
+print(f"Cleaned up {len(deleted)} old sessions")
+
+# Delete specific session
+manager.delete_session("session-123")
+```
+
+---
+
+## Batch Processing
+
+Process multiple prompts efficiently with concurrency control.
+
+```python
+from claude_code_provider import ClaudeCodeClient, BatchProcessor
+
+client = ClaudeCodeClient(model="haiku")
+processor = BatchProcessor(client, default_concurrency=3)
+
+# Process multiple prompts
+prompts = [
+    "Summarize quantum computing",
+    "Explain machine learning",
+    "What is blockchain?",
+]
+
+result = await processor.process_batch(
+    prompts=prompts,
+    system_prompt="Be concise.",
+    concurrency=5,
+    progress_callback=lambda done, total: print(f"{done}/{total}"),
+)
+
+print(f"Success rate: {result.success_rate:.1%}")
+for item in result.items:
+    if item.status == "completed":
+        print(f"{item.id}: {item.result[:50]}...")
+
+# Process with template
+files = ["file1.py", "file2.py", "file3.py"]
+result = await processor.process_with_transform(
+    items=files,
+    prompt_template="Analyze the code in {filename}",
+    transform=lambda f: {"filename": f},
+)
+
+# Map-reduce pattern
+summaries = ["Summary of chapter 1", "Summary of chapter 2", "Summary of chapter 3"]
+map_result, final = await processor.map_reduce(
+    prompts=[f"Expand on: {s}" for s in summaries],
+    reduce_prompt="Combine these expansions into a cohesive narrative:\n{results}",
+)
+print(f"Final result: {final}")
+```
+
+---
+
 ## MAF-Standard Methods
 
 ClaudeAgent provides full compatibility with MAF's ChatAgent interface:
 
-### Core Methods
-
 ```python
 # Run a conversation
 response = await agent.run("Hello, how are you?")
-print(response.text)
 
 # Stream responses
 async for update in agent.run_stream("Tell me a story"):
     if update.text:
         print(update.text, end="")
-```
 
-### Agent Properties
-
-```python
+# Agent properties
 agent.name           # Agent name
 agent.instructions   # System instructions
 agent.display_name   # Display name for UI
-```
 
-### Serialization
-
-```python
-# Serialize to dictionary
+# Serialization
 data = agent.to_dict()
-
-# Serialize to JSON
 json_str = agent.to_json()
-```
 
-### Tool Conversion
+# Convert to tool
+tool = agent.as_tool(name="helper_tool")
 
-```python
-# Convert agent to a tool for use by other agents
-tool = agent.as_tool(
-    name="helper_tool",
-    description="A helpful assistant tool",
-)
-```
+# Expose as MCP server
+server = agent.as_mcp_server(server_name="MyAgent")
 
-### MCP Server
-
-```python
-# Expose agent as an MCP server
-server = agent.as_mcp_server(
-    server_name="MyAgent",
-    version="1.0.0",
-)
-```
-
-### Threading
-
-```python
-# Get a new conversation thread
+# Threading
 thread = agent.get_new_thread()
-
-# Deserialize a saved thread
-thread = agent.deserialize_thread(saved_thread_data)
-
-# Use thread in conversation
 response = await agent.run("Hello", thread=thread)
 ```
 
-## Extension Methods (Claude Code Provider Specific)
-
-These methods extend the standard MAF API with Claude Code specific functionality:
-
-### Context Management
-
-```python
-# Manually compact conversation to reduce context
-result = await agent.compact()
-print(f"Compacted: {result.original_tokens_estimate} -> {result.summary_tokens_estimate} tokens")
-
-# Get context usage information
-ctx = agent.get_context_info()
-print(f"Tokens: {ctx.estimated_tokens}/{ctx.context_limit} ({ctx.usage_percent:.1f}%)")
-print(f"Messages: {ctx.messages_count}")
-print(f"Has summary: {ctx.has_summary}")
-print(f"Autocompact enabled: {ctx.autocompact_enabled}")
-```
-
-### Usage Tracking
-
-```python
-# Get accumulated usage statistics
-usage = agent.get_usage()
-print(f"Total requests: {usage.total_requests}")
-print(f"Input tokens: {usage.total_input_tokens}")
-print(f"Output tokens: {usage.total_output_tokens}")
-print(f"Compactions: {usage.compactions}")
-print(f"Tokens saved: {usage.tokens_saved_by_compact}")
-```
-
-### State Management
-
-```python
-# Get conversation history
-messages = agent.get_messages()
-
-# Estimate current token count
-tokens = agent.get_token_estimate()
-
-# Reset conversation (preserves usage stats)
-agent.reset()
-
-# Reset usage statistics
-agent.reset_usage()
-```
+---
 
 ## CLI Limitations
 
-Some MAF parameters are passed through but may not be fully supported by Claude Code CLI:
+Some MAF parameters may not be fully supported by Claude Code CLI:
 
 | Parameter | Status |
 |-----------|--------|
@@ -210,16 +352,7 @@ Some MAF parameters are passed through but may not be fully supported by Claude 
 | `seed` | Passed through, may be ignored |
 | `logit_bias` | Not supported |
 
-## Examples
-
-See the `demos/` directory for progressive examples:
-
-1. `01_hello_world.py` - Basic usage
-2. `02_streaming.py` - Streaming responses
-3. `03_conversation.py` - Conversation continuity
-4. `04_tools.py` - Using Claude Code tools
-5. `05_agent.py` - Agent with instructions
-6. `06_multi_agent.py` - Multiple agents
+---
 
 ## Testing
 
@@ -231,31 +364,56 @@ python -m pytest tests/test_claude_code_provider.py -v
 python -m pytest tests/test_claude_code_provider.py -v -k "not Integration"
 ```
 
+---
+
 ## API Reference
 
-### ClaudeCodeClient
-
-The main client class for Claude Code CLI integration.
+### Core Classes
 
 ```python
-ClaudeCodeClient(
-    model: str | None = None,           # Default model
-    cli_path: str = "claude",           # Path to CLI
-    max_turns: int | None = None,       # Max agentic turns
-    tools: list[str] | None = None,     # Enabled tools
-    allowed_tools: list[str] | None = None,    # Auto-approved tools
-    disallowed_tools: list[str] | None = None, # Blocked tools
-    working_directory: str | None = None,       # Working directory
-    timeout: float = 300.0,             # Timeout in seconds
-    retry_config: RetryConfig | None = None,   # Custom retry config
-    enable_retries: bool = False,       # Enable retries
-    enable_circuit_breaker: bool = True,       # Enable circuit breaker
+from claude_code_provider import (
+    # Core
+    ClaudeCodeClient,      # Main client
+    ClaudeCodeSettings,    # Configuration
+    ClaudeAgent,           # Enhanced agent wrapper
+
+    # MCP
+    MCPServer,             # MCP server config
+    MCPTransport,          # Transport types
+    MCPManager,            # MCP management
+
+    # Cost Tracking
+    CostTracker,           # Cost monitoring
+    RequestCost,           # Single request cost
+    CostSummary,           # Aggregated costs
+
+    # Model Routing
+    ModelRouter,           # Main router
+    ComplexityRouter,      # Complexity-based
+    CostOptimizedRouter,   # Cost-optimized
+    TaskTypeRouter,        # Task-type based
+    CustomRouter,          # Custom function
+
+    # Logging
+    DebugLogger,           # Enhanced logger
+    setup_logging,         # Quick setup
+
+    # Sessions
+    SessionManager,        # Session tracking
+    SessionInfo,           # Session metadata
+    SessionExport,         # Exported session
+
+    # Batch
+    BatchProcessor,        # Batch operations
+    BatchResult,           # Batch results
+    BatchItem,             # Single item
+    BatchStatus,           # Item status
+
+    # Resilience
+    RetryConfig,           # Retry settings
+    CircuitBreaker,        # Circuit breaker
 )
 ```
-
-### ClaudeAgent
-
-Enhanced agent wrapper with compact and tracking functionality.
 
 ### Exceptions
 
@@ -271,17 +429,7 @@ from claude_code_provider import (
 )
 ```
 
-### Data Classes
-
-```python
-from claude_code_provider import (
-    CompactResult,    # Result of compact operation
-    UsageStats,       # Accumulated usage statistics
-    ContextInfo,      # Context usage information
-    RetryConfig,      # Retry configuration
-    CircuitBreaker,   # Circuit breaker for resilience
-)
-```
+---
 
 ## License
 
