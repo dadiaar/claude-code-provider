@@ -26,6 +26,7 @@ try:
     )
     from ._settings import ClaudeCodeSettings
     from ._retry import RetryConfig
+    from ._agent import ClaudeAgent, DEFAULT_AUTOCOMPACT_THRESHOLD
 except ImportError:
     from _cli_executor import CLIExecutor
     from _message_converter import prepare_cli_execution
@@ -35,6 +36,7 @@ except ImportError:
     )
     from _settings import ClaudeCodeSettings
     from _retry import RetryConfig
+    from _agent import ClaudeAgent, DEFAULT_AUTOCOMPACT_THRESHOLD
 
 logger = logging.getLogger("claude_code_provider")
 
@@ -268,3 +270,53 @@ class ClaudeCodeClient(BaseChatClient):
             The current session ID if a conversation is in progress.
         """
         return self._session_id
+
+    def create_agent(
+        self,
+        *,
+        autocompact: bool = False,
+        autocompact_threshold: int = DEFAULT_AUTOCOMPACT_THRESHOLD,
+        keep_last_n_messages: int = 2,
+        **kwargs: Any,
+    ) -> ClaudeAgent:
+        """Create an agent with optional autocompact support.
+
+        Args:
+            autocompact: Whether to automatically compact when threshold is reached.
+            autocompact_threshold: Token threshold for autocompact (default: 100,000).
+            keep_last_n_messages: Recent messages to keep when compacting (default: 2).
+            **kwargs: Arguments passed to BaseChatClient.create_agent().
+
+        Returns:
+            ClaudeAgent with compact functionality.
+
+        Example:
+            ```python
+            # Agent with autocompact enabled
+            agent = client.create_agent(
+                name="assistant",
+                instructions="You are helpful.",
+                autocompact=True,
+                autocompact_threshold=50_000,
+            )
+
+            # Long conversation - autocompact happens automatically
+            for i in range(100):
+                response = await agent.run(f"Message {i}")
+
+            # Or manually compact anytime
+            result = await agent.compact()
+            print(f"Compacted: {result.original_tokens_estimate} -> {result.summary_tokens_estimate} tokens")
+            ```
+        """
+        # Create the inner MAF agent
+        inner_agent = super().create_agent(**kwargs)
+
+        # Wrap with our enhanced agent
+        return ClaudeAgent(
+            inner_agent=inner_agent,
+            client=self,
+            autocompact=autocompact,
+            autocompact_threshold=autocompact_threshold,
+            keep_last_n_messages=keep_last_n_messages,
+        )
