@@ -7,7 +7,7 @@ name = "claude-code-provider"
 version = "0.1.0"
 description = "Claude Code CLI provider for Microsoft Agent Framework"
 readme = "README.md"
-license = "Proprietary"
+license = {text = "Proprietary - All Rights Reserved"}
 requires-python = ">=3.10"
 authors = [
     { name = "Swarm Project" },
@@ -48,12 +48,12 @@ Homepage = "https://github.com/microsoft/agent-framework"
 Documentation = "https://learn.microsoft.com/en-us/agent-framework/"
 
 [tool.hatch.build.targets.wheel]
-packages = ["."]
+packages = ["claude_code_provider"]
 
 [tool.hatch.build.targets.sdist]
 include = [
-    "*.py",
-    "py.typed",
+    "claude_code_provider/*.py",
+    "claude_code_provider/py.typed",
 ]
 exclude = [
     "tests/",
