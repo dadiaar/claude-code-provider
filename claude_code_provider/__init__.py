@@ -19,7 +19,7 @@ Example:
 try:
     from ._settings import ClaudeCodeSettings
     from ._chat_client import ClaudeCodeClient
-    from ._agent import ClaudeAgent, CompactResult
+    from ._agent import ClaudeAgent, CompactResult, UsageStats, ContextInfo
     from ._exceptions import (
         ClaudeCodeException,
         ClaudeCodeCLINotFoundError,
@@ -33,7 +33,7 @@ try:
 except ImportError:
     from _settings import ClaudeCodeSettings
     from _chat_client import ClaudeCodeClient
-    from _agent import ClaudeAgent, CompactResult
+    from _agent import ClaudeAgent, CompactResult, UsageStats, ContextInfo
     from _exceptions import (
         ClaudeCodeException,
         ClaudeCodeCLINotFoundError,
@@ -50,6 +50,8 @@ __all__ = [
     "ClaudeCodeSettings",
     "ClaudeAgent",
     "CompactResult",
+    "UsageStats",
+    "ContextInfo",
     "ClaudeCodeException",
     "ClaudeCodeCLINotFoundError",
     "ClaudeCodeExecutionError",

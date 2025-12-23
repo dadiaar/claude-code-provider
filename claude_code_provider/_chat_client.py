@@ -274,7 +274,7 @@ class ClaudeCodeClient(BaseChatClient):
     def create_agent(
         self,
         *,
-        autocompact: bool = False,
+        autocompact: bool = True,
         autocompact_threshold: int = DEFAULT_AUTOCOMPACT_THRESHOLD,
         keep_last_n_messages: int = 2,
         **kwargs: Any,
@@ -283,6 +283,7 @@ class ClaudeCodeClient(BaseChatClient):
 
         Args:
             autocompact: Whether to automatically compact when threshold is reached.
+                Defaults to True to prevent context overflow errors.
             autocompact_threshold: Token threshold for autocompact (default: 100,000).
             keep_last_n_messages: Recent messages to keep when compacting (default: 2).
             **kwargs: Arguments passed to BaseChatClient.create_agent().

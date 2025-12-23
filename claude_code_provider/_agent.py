@@ -18,6 +18,34 @@ CHARS_PER_TOKEN = 4
 # Default threshold for autocompact (in estimated tokens)
 DEFAULT_AUTOCOMPACT_THRESHOLD = 100_000
 
+# Claude's context window (approximate)
+CLAUDE_CONTEXT_LIMIT = 200_000
+
+
+@dataclass
+class UsageStats:
+    """Accumulated usage statistics."""
+    total_input_tokens: int = 0
+    total_output_tokens: int = 0
+    total_requests: int = 0
+    compactions: int = 0
+
+    @property
+    def total_tokens(self) -> int:
+        return self.total_input_tokens + self.total_output_tokens
+
+
+@dataclass
+class ContextInfo:
+    """Information about current context usage."""
+    estimated_tokens: int
+    context_limit: int
+    usage_percent: float
+    messages_count: int
+    has_summary: bool
+    autocompact_enabled: bool
+    autocompact_threshold: int
+
 
 @dataclass
 class CompactResult:
@@ -68,7 +96,7 @@ class ClaudeAgent:
         inner_agent: ChatAgent,
         client: "ClaudeCodeClient",
         *,
-        autocompact: bool = False,
+        autocompact: bool = True,  # ON by default to prevent context overflow
         autocompact_threshold: int = DEFAULT_AUTOCOMPACT_THRESHOLD,
         keep_last_n_messages: int = 2,
     ) -> None:
@@ -78,7 +106,8 @@ class ClaudeAgent:
             inner_agent: The MAF ChatAgent to wrap.
             client: The ClaudeCodeClient for making compact requests.
             autocompact: Whether to automatically compact when threshold is reached.
-            autocompact_threshold: Token threshold for autocompact.
+                Defaults to True to prevent context overflow errors.
+            autocompact_threshold: Token threshold for autocompact (default: 100,000).
             keep_last_n_messages: Number of recent messages to keep uncompacted.
         """
         self._agent = inner_agent
@@ -91,6 +120,9 @@ class ClaudeAgent:
         self._messages: list[ConversationMessage] = []
         self._compact_summary: str | None = None
         self._needs_context_injection: bool = False  # True after compact
+
+        # Usage tracking
+        self._usage = UsageStats()
 
     @property
     def name(self) -> str | None:
@@ -117,6 +149,31 @@ class ClaudeAgent:
     def get_token_estimate(self) -> int:
         """Get estimated token count of conversation."""
         return self._estimate_tokens(self._messages)
+
+    def get_usage(self) -> UsageStats:
+        """Get accumulated usage statistics.
+
+        Returns:
+            UsageStats with total tokens used across all requests.
+        """
+        return self._usage
+
+    def get_context_info(self) -> ContextInfo:
+        """Get information about current context usage.
+
+        Returns:
+            ContextInfo with details about context usage and limits.
+        """
+        estimated = self.get_token_estimate()
+        return ContextInfo(
+            estimated_tokens=estimated,
+            context_limit=CLAUDE_CONTEXT_LIMIT,
+            usage_percent=round((estimated / CLAUDE_CONTEXT_LIMIT) * 100, 1),
+            messages_count=len(self._messages),
+            has_summary=self._compact_summary is not None,
+            autocompact_enabled=self._autocompact,
+            autocompact_threshold=self._autocompact_threshold,
+        )
 
     async def compact(
         self,
@@ -181,6 +238,7 @@ Output only the summary, no preamble.""",
         self._compact_summary = summary
         self._messages = messages_to_keep
         self._needs_context_injection = True  # Inject context on next run
+        self._usage.compactions += 1
 
         summary_tokens = len(summary) // CHARS_PER_TOKEN
         kept_tokens = self._estimate_tokens(messages_to_keep)
@@ -252,6 +310,15 @@ Output only the summary, no preamble.""",
         if response.text:
             self._messages.append(ConversationMessage(role="assistant", text=response.text))
 
+        # Track usage
+        self._usage.total_requests += 1
+        if hasattr(response, 'usage_details') and response.usage_details:
+            ud = response.usage_details
+            if hasattr(ud, 'input_token_count'):
+                self._usage.total_input_tokens += ud.input_token_count or 0
+            if hasattr(ud, 'output_token_count'):
+                self._usage.total_output_tokens += ud.output_token_count or 0
+
         return response
 
     async def run_stream(
@@ -296,8 +363,15 @@ Output only the summary, no preamble.""",
             self._messages.append(ConversationMessage(role="assistant", text=full_response))
 
     def reset(self) -> None:
-        """Reset the conversation, starting fresh."""
+        """Reset the conversation, starting fresh.
+
+        Note: This does NOT reset usage stats. Call reset_usage() for that.
+        """
         self._messages = []
         self._compact_summary = None
         self._needs_context_injection = False
         self._client.reset_session()
+
+    def reset_usage(self) -> None:
+        """Reset usage statistics to zero."""
+        self._usage = UsageStats()
