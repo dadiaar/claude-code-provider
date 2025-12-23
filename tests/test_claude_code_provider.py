@@ -11,12 +11,12 @@ Or run directly:
 """
 
 import asyncio
+import json
 import sys
 from pathlib import Path
 
-# Add paths for imports
+# Add parent directory to allow importing the package
 sys.path.insert(0, str(Path(__file__).parent.parent))
-sys.path.insert(0, str(Path(__file__).parent.parent.parent / "microsoft-agent-framework" / "python" / "packages" / "core"))
 
 
 # =============================================================================
@@ -28,7 +28,7 @@ class TestSettings:
 
     def test_default_settings(self):
         """Test default settings initialization."""
-        from _settings import ClaudeCodeSettings
+        from claude_code_provider._settings import ClaudeCodeSettings
 
         settings = ClaudeCodeSettings()
         assert settings.cli_path == "claude"
@@ -37,7 +37,7 @@ class TestSettings:
 
     def test_custom_settings(self):
         """Test custom settings."""
-        from _settings import ClaudeCodeSettings
+        from claude_code_provider._settings import ClaudeCodeSettings
 
         settings = ClaudeCodeSettings(
             model="opus",
@@ -50,7 +50,7 @@ class TestSettings:
 
     def test_to_cli_args(self):
         """Test CLI args generation."""
-        from _settings import ClaudeCodeSettings
+        from claude_code_provider._settings import ClaudeCodeSettings
 
         settings = ClaudeCodeSettings(
             model="sonnet",
@@ -77,7 +77,7 @@ class TestExceptions:
             ChatClientException,
             ServiceResponseException,
         )
-        from _exceptions import (
+        from claude_code_provider._exceptions import (
             ClaudeCodeException,
             ClaudeCodeExecutionError,
             ClaudeCodeCLINotFoundError,
@@ -96,7 +96,7 @@ class TestExceptions:
 
     def test_exception_attributes(self):
         """Test exception attributes."""
-        from _exceptions import ClaudeCodeExecutionError
+        from claude_code_provider._exceptions import ClaudeCodeExecutionError
 
         exc = ClaudeCodeExecutionError(
             message="Test error",
@@ -114,7 +114,7 @@ class TestMessageConverter:
     def test_extract_system_prompt(self):
         """Test system prompt extraction."""
         from agent_framework import ChatMessage, Role
-        from _message_converter import extract_system_prompt
+        from claude_code_provider._message_converter import extract_system_prompt
 
         messages = [
             ChatMessage(role=Role.SYSTEM, text="You are helpful."),
@@ -126,7 +126,7 @@ class TestMessageConverter:
     def test_extract_system_prompt_none(self):
         """Test when no system prompt."""
         from agent_framework import ChatMessage, Role
-        from _message_converter import extract_system_prompt
+        from claude_code_provider._message_converter import extract_system_prompt
 
         messages = [
             ChatMessage(role=Role.USER, text="Hello"),
@@ -137,7 +137,7 @@ class TestMessageConverter:
     def test_extract_user_prompt(self):
         """Test user prompt extraction."""
         from agent_framework import ChatMessage, Role
-        from _message_converter import extract_user_prompt
+        from claude_code_provider._message_converter import extract_user_prompt
 
         messages = [
             ChatMessage(role=Role.USER, text="Hello"),
@@ -148,7 +148,7 @@ class TestMessageConverter:
     def test_extract_user_prompt_conversation(self):
         """Test conversation formatting."""
         from agent_framework import ChatMessage, Role
-        from _message_converter import extract_user_prompt
+        from claude_code_provider._message_converter import extract_user_prompt
 
         messages = [
             ChatMessage(role=Role.USER, text="Hello"),
@@ -166,8 +166,8 @@ class TestResponseParser:
 
     def test_parse_cli_result(self):
         """Test parsing CLI result to ChatResponse."""
-        from _cli_executor import CLIResult
-        from _response_parser import parse_cli_result_to_response
+        from claude_code_provider._cli_executor import CLIResult
+        from claude_code_provider._response_parser import parse_cli_result_to_response
 
         result = CLIResult(
             success=True,
@@ -186,8 +186,8 @@ class TestResponseParser:
 
     def test_parse_cli_result_no_usage(self):
         """Test parsing result without usage."""
-        from _cli_executor import CLIResult
-        from _response_parser import parse_cli_result_to_response
+        from claude_code_provider._cli_executor import CLIResult
+        from claude_code_provider._response_parser import parse_cli_result_to_response
 
         result = CLIResult(
             success=True,
@@ -205,8 +205,8 @@ class TestCLIExecutor:
 
     def test_build_args_basic(self):
         """Test basic argument building."""
-        from _settings import ClaudeCodeSettings
-        from _cli_executor import CLIExecutor
+        from claude_code_provider._settings import ClaudeCodeSettings
+        from claude_code_provider._cli_executor import CLIExecutor
 
         settings = ClaudeCodeSettings(model="haiku")
         executor = CLIExecutor(settings)
@@ -225,8 +225,8 @@ class TestCLIExecutor:
 
     def test_build_args_streaming(self):
         """Test streaming argument building."""
-        from _settings import ClaudeCodeSettings
-        from _cli_executor import CLIExecutor
+        from claude_code_provider._settings import ClaudeCodeSettings
+        from claude_code_provider._cli_executor import CLIExecutor
 
         settings = ClaudeCodeSettings()
         executor = CLIExecutor(settings)
@@ -242,8 +242,8 @@ class TestCLIExecutor:
 
     def test_build_args_with_session(self):
         """Test session resumption args."""
-        from _settings import ClaudeCodeSettings
-        from _cli_executor import CLIExecutor
+        from claude_code_provider._settings import ClaudeCodeSettings
+        from claude_code_provider._cli_executor import CLIExecutor
 
         settings = ClaudeCodeSettings()
         executor = CLIExecutor(settings)
@@ -259,8 +259,8 @@ class TestCLIExecutor:
 
     def test_build_args_with_system_prompt(self):
         """Test system prompt args."""
-        from _settings import ClaudeCodeSettings
-        from _cli_executor import CLIExecutor
+        from claude_code_provider._settings import ClaudeCodeSettings
+        from claude_code_provider._cli_executor import CLIExecutor
 
         settings = ClaudeCodeSettings()
         executor = CLIExecutor(settings)
@@ -276,8 +276,8 @@ class TestCLIExecutor:
 
     def test_executor_with_timeout(self):
         """Test executor respects timeout setting."""
-        from _settings import ClaudeCodeSettings
-        from _cli_executor import CLIExecutor
+        from claude_code_provider._settings import ClaudeCodeSettings
+        from claude_code_provider._cli_executor import CLIExecutor
 
         settings = ClaudeCodeSettings()
         executor = CLIExecutor(settings, timeout=60.0)
@@ -286,8 +286,8 @@ class TestCLIExecutor:
 
     def test_executor_with_circuit_breaker(self):
         """Test executor has circuit breaker by default."""
-        from _settings import ClaudeCodeSettings
-        from _cli_executor import CLIExecutor
+        from claude_code_provider._settings import ClaudeCodeSettings
+        from claude_code_provider._cli_executor import CLIExecutor
 
         settings = ClaudeCodeSettings()
         executor = CLIExecutor(settings)
@@ -297,8 +297,8 @@ class TestCLIExecutor:
 
     def test_executor_without_circuit_breaker(self):
         """Test executor can disable circuit breaker."""
-        from _settings import ClaudeCodeSettings
-        from _cli_executor import CLIExecutor
+        from claude_code_provider._settings import ClaudeCodeSettings
+        from claude_code_provider._cli_executor import CLIExecutor
 
         settings = ClaudeCodeSettings()
         executor = CLIExecutor(settings, enable_circuit_breaker=False)
@@ -311,7 +311,7 @@ class TestRetry:
 
     def test_retry_config_defaults(self):
         """Test RetryConfig default values."""
-        from _retry import RetryConfig
+        from claude_code_provider._retry import RetryConfig
 
         config = RetryConfig()
         assert config.max_retries == 3
@@ -320,7 +320,7 @@ class TestRetry:
 
     def test_retry_config_delay_calculation(self):
         """Test exponential backoff delay calculation."""
-        from _retry import RetryConfig
+        from claude_code_provider._retry import RetryConfig
 
         config = RetryConfig(base_delay=1.0, exponential_base=2.0, jitter=False)
 
@@ -330,7 +330,7 @@ class TestRetry:
 
     def test_retry_config_max_delay(self):
         """Test delay is capped at max_delay."""
-        from _retry import RetryConfig
+        from claude_code_provider._retry import RetryConfig
 
         config = RetryConfig(base_delay=10.0, max_delay=15.0, jitter=False)
 
@@ -340,7 +340,7 @@ class TestRetry:
 
     def test_circuit_breaker_initial_state(self):
         """Test circuit breaker starts closed."""
-        from _retry import CircuitBreaker
+        from claude_code_provider._retry import CircuitBreaker
 
         cb = CircuitBreaker()
         assert cb.state == "CLOSED"
@@ -348,7 +348,7 @@ class TestRetry:
 
     def test_circuit_breaker_opens_after_failures(self):
         """Test circuit breaker opens after threshold failures."""
-        from _retry import CircuitBreaker
+        from claude_code_provider._retry import CircuitBreaker
 
         cb = CircuitBreaker(failure_threshold=3)
 
@@ -362,7 +362,7 @@ class TestRetry:
 
     def test_circuit_breaker_success_resets_failures(self):
         """Test success resets failure count."""
-        from _retry import CircuitBreaker
+        from claude_code_provider._retry import CircuitBreaker
 
         cb = CircuitBreaker(failure_threshold=3)
 
@@ -372,6 +372,155 @@ class TestRetry:
         cb.record_failure()
         cb.record_failure()
         assert cb.state == "CLOSED"  # Didn't reach threshold
+
+
+class TestClaudeAgent:
+    """Test ClaudeAgent wrapper functionality."""
+
+    def test_agent_properties(self):
+        """Test agent properties are accessible."""
+        from claude_code_provider import ClaudeCodeClient
+
+        client = ClaudeCodeClient(model="haiku")
+        agent = client.create_agent(
+            name="test_agent",
+            instructions="Be helpful.",
+        )
+
+        assert agent.name == "test_agent"
+        assert agent.instructions == "Be helpful."
+        assert agent.display_name is not None
+
+    def test_agent_to_dict(self):
+        """Test agent serialization."""
+        from claude_code_provider import ClaudeCodeClient
+
+        client = ClaudeCodeClient(model="haiku")
+        agent = client.create_agent(name="test", instructions="Test")
+
+        d = agent.to_dict()
+        assert "name" in d
+        assert d["name"] == "test"
+
+    def test_agent_to_json(self):
+        """Test agent JSON serialization."""
+        from claude_code_provider import ClaudeCodeClient
+        import json
+
+        client = ClaudeCodeClient(model="haiku")
+        agent = client.create_agent(name="test", instructions="Test")
+
+        j = agent.to_json()
+        data = json.loads(j)
+        assert data["name"] == "test"
+
+    def test_agent_as_tool(self):
+        """Test agent can be converted to a tool."""
+        from claude_code_provider import ClaudeCodeClient
+        from agent_framework._tools import AIFunction
+
+        client = ClaudeCodeClient(model="haiku")
+        agent = client.create_agent(name="helper", instructions="Help with tasks.")
+
+        tool = agent.as_tool(name="helper_tool")
+        assert isinstance(tool, AIFunction)
+
+    def test_agent_get_new_thread(self):
+        """Test agent can create new threads."""
+        from claude_code_provider import ClaudeCodeClient
+        from agent_framework._threads import AgentThread
+
+        client = ClaudeCodeClient(model="haiku")
+        agent = client.create_agent(name="test", instructions="Test")
+
+        thread = agent.get_new_thread()
+        assert isinstance(thread, AgentThread)
+
+    def test_agent_autocompact_default_on(self):
+        """Test autocompact is enabled by default."""
+        from claude_code_provider import ClaudeCodeClient
+
+        client = ClaudeCodeClient(model="haiku")
+        agent = client.create_agent(name="test", instructions="Test")
+
+        ctx = agent.get_context_info()
+        assert ctx.autocompact_enabled is True
+
+    def test_agent_autocompact_can_disable(self):
+        """Test autocompact can be disabled."""
+        from claude_code_provider import ClaudeCodeClient
+
+        client = ClaudeCodeClient(model="haiku")
+        agent = client.create_agent(
+            name="test",
+            instructions="Test",
+            autocompact=False,
+        )
+
+        ctx = agent.get_context_info()
+        assert ctx.autocompact_enabled is False
+
+    def test_agent_usage_tracking(self):
+        """Test usage stats structure."""
+        from claude_code_provider import ClaudeCodeClient
+
+        client = ClaudeCodeClient(model="haiku")
+        agent = client.create_agent(name="test", instructions="Test")
+
+        usage = agent.get_usage()
+        assert usage.total_requests == 0
+        assert usage.total_input_tokens == 0
+        assert usage.total_output_tokens == 0
+        assert usage.compactions == 0
+
+    def test_agent_context_info(self):
+        """Test context info structure."""
+        from claude_code_provider import ClaudeCodeClient
+
+        client = ClaudeCodeClient(model="haiku")
+        agent = client.create_agent(name="test", instructions="Test")
+
+        ctx = agent.get_context_info()
+        assert ctx.estimated_tokens == 0
+        assert ctx.context_limit == 200_000
+        assert ctx.usage_percent == 0.0
+        assert ctx.messages_count == 0
+        assert ctx.has_summary is False
+
+    def test_agent_reset(self):
+        """Test agent reset functionality."""
+        from claude_code_provider import ClaudeCodeClient
+
+        client = ClaudeCodeClient(model="haiku")
+        agent = client.create_agent(name="test", instructions="Test")
+
+        # Simulate some state
+        agent._messages.append(type('obj', (object,), {'role': 'user', 'text': 'test'})())
+        agent._compact_summary = "Some summary"
+        agent._usage.total_requests = 5
+
+        # Reset
+        agent.reset()
+
+        assert len(agent._messages) == 0
+        assert agent._compact_summary is None
+        # Usage is NOT reset
+        assert agent._usage.total_requests == 5
+
+    def test_agent_reset_usage(self):
+        """Test usage reset functionality."""
+        from claude_code_provider import ClaudeCodeClient
+
+        client = ClaudeCodeClient(model="haiku")
+        agent = client.create_agent(name="test", instructions="Test")
+
+        agent._usage.total_requests = 10
+        agent._usage.total_input_tokens = 100
+
+        agent.reset_usage()
+
+        assert agent._usage.total_requests == 0
+        assert agent._usage.total_input_tokens == 0
 
 
 # =============================================================================
@@ -388,7 +537,7 @@ class TestIntegration:
 
     def test_simple_query(self):
         """Test simple query execution."""
-        from _chat_client import ClaudeCodeClient
+        from claude_code_provider import ClaudeCodeClient
 
         async def run():
             client = ClaudeCodeClient(model="haiku")
@@ -404,7 +553,7 @@ class TestIntegration:
 
     def test_agent_creation(self):
         """Test agent creation and execution."""
-        from _chat_client import ClaudeCodeClient
+        from claude_code_provider import ClaudeCodeClient
 
         async def run():
             client = ClaudeCodeClient(model="haiku")
@@ -421,7 +570,7 @@ class TestIntegration:
 
     def test_conversation_continuity(self):
         """Test session-based conversation continuity."""
-        from _chat_client import ClaudeCodeClient
+        from claude_code_provider import ClaudeCodeClient
 
         async def run():
             client = ClaudeCodeClient(model="haiku")
@@ -441,7 +590,7 @@ class TestIntegration:
 
     def test_streaming(self):
         """Test streaming response."""
-        from _chat_client import ClaudeCodeClient
+        from claude_code_provider import ClaudeCodeClient
 
         async def run():
             client = ClaudeCodeClient(model="haiku")
@@ -462,7 +611,7 @@ class TestIntegration:
 
     def test_usage_tracking(self):
         """Test token usage tracking."""
-        from _chat_client import ClaudeCodeClient
+        from claude_code_provider import ClaudeCodeClient
 
         async def run():
             client = ClaudeCodeClient(model="haiku")
@@ -478,7 +627,7 @@ class TestIntegration:
 
     def test_tools_read(self):
         """Test Read tool."""
-        from _chat_client import ClaudeCodeClient
+        from claude_code_provider import ClaudeCodeClient
 
         async def run():
             client = ClaudeCodeClient(model="haiku", tools=["Read"])
@@ -495,7 +644,7 @@ class TestIntegration:
 
     def test_tools_bash(self):
         """Test Bash tool."""
-        from _chat_client import ClaudeCodeClient
+        from claude_code_provider import ClaudeCodeClient
 
         async def run():
             client = ClaudeCodeClient(model="haiku", tools=["Bash"])
@@ -510,7 +659,7 @@ class TestIntegration:
 
     def test_session_reset(self):
         """Test session reset functionality."""
-        from _chat_client import ClaudeCodeClient
+        from claude_code_provider import ClaudeCodeClient
 
         async def run():
             client = ClaudeCodeClient(model="haiku")
