@@ -63,6 +63,12 @@ try:
         ConcurrentBuilder,
     )
     from agent_framework._workflows._group_chat import GroupChatStateSnapshot
+    from agent_framework._workflows._events import (
+        AgentRunUpdateEvent,
+        AgentRunEvent,
+        WorkflowOutputEvent,
+        ExecutorCompletedEvent,
+    )
     MAF_ORCHESTRATION_AVAILABLE = True
 except ImportError:
     MAF_ORCHESTRATION_AVAILABLE = False
@@ -71,6 +77,10 @@ except ImportError:
     SequentialBuilder = None
     ConcurrentBuilder = None
     GroupChatStateSnapshot = None
+    AgentRunUpdateEvent = None
+    AgentRunEvent = None
+    WorkflowOutputEvent = None
+    ExecutorCompletedEvent = None
 
 # Try to import MagenticBuilder (may be in separate location)
 try:
@@ -689,24 +699,32 @@ class GroupChatOrchestrator:
         conversation = []
         participants_used = set()
         rounds = 0
+        last_text = ""
 
-        async for response in self._workflow.run_stream(task):
-            # Collect conversation and track participants
-            if hasattr(response, 'messages'):
-                for msg in response.messages:
-                    conversation.append(msg)
-                    if hasattr(msg, 'name') and msg.name:
-                        participants_used.add(msg.name)
+        async for event in self._workflow.run_stream(task):
+            # Handle AgentRunUpdateEvent - captures streaming agent responses
+            if AgentRunUpdateEvent and isinstance(event, AgentRunUpdateEvent):
+                if event.executor_id:
+                    participants_used.add(event.executor_id)
+                if event.data and hasattr(event.data, 'text') and event.data.text:
+                    last_text = event.data.text
+                rounds += 1
 
-            if hasattr(response, 'agent_name'):
-                participants_used.add(response.agent_name)
+            # Handle WorkflowOutputEvent - captures final conversation
+            elif WorkflowOutputEvent and isinstance(event, WorkflowOutputEvent):
+                if event.data and isinstance(event.data, list):
+                    conversation = event.data
 
-            rounds += 1
-
-        # Get final output
-        final_output = ""
-        if conversation:
-            final_output = conversation[-1].text if hasattr(conversation[-1], 'text') else str(conversation[-1])
+        # Get final output from last text or conversation
+        final_output = last_text
+        if not final_output and conversation:
+            last_msg = conversation[-1]
+            if hasattr(last_msg, 'text'):
+                final_output = last_msg.text
+            elif isinstance(last_msg, dict) and 'text' in last_msg:
+                final_output = last_msg['text']
+            else:
+                final_output = str(last_msg)
 
         return OrchestrationResult(
             final_output=final_output,
@@ -809,18 +827,32 @@ class HandoffOrchestrator:
         conversation = []
         participants_used = set()
         rounds = 0
+        last_text = ""
 
-        async for response in self._workflow.run_stream(task):
-            if hasattr(response, 'messages'):
-                for msg in response.messages:
-                    conversation.append(msg)
-                    if hasattr(msg, 'name') and msg.name:
-                        participants_used.add(msg.name)
-            rounds += 1
+        async for event in self._workflow.run_stream(task):
+            # Handle AgentRunUpdateEvent - captures streaming agent responses
+            if AgentRunUpdateEvent and isinstance(event, AgentRunUpdateEvent):
+                if event.executor_id:
+                    participants_used.add(event.executor_id)
+                if event.data and hasattr(event.data, 'text') and event.data.text:
+                    last_text = event.data.text
+                rounds += 1
 
-        final_output = ""
-        if conversation:
-            final_output = conversation[-1].text if hasattr(conversation[-1], 'text') else str(conversation[-1])
+            # Handle WorkflowOutputEvent - captures final conversation
+            elif WorkflowOutputEvent and isinstance(event, WorkflowOutputEvent):
+                if event.data and isinstance(event.data, list):
+                    conversation = event.data
+
+        # Get final output from last text or conversation
+        final_output = last_text
+        if not final_output and conversation:
+            last_msg = conversation[-1]
+            if hasattr(last_msg, 'text'):
+                final_output = last_msg.text
+            elif isinstance(last_msg, dict) and 'text' in last_msg:
+                final_output = last_msg['text']
+            else:
+                final_output = str(last_msg)
 
         return OrchestrationResult(
             final_output=final_output,
@@ -881,17 +913,31 @@ class SequentialOrchestrator:
 
         conversation = []
         participants_used = set()
+        last_text = ""
 
-        async for response in self._workflow.run_stream(task):
-            if hasattr(response, 'messages'):
-                for msg in response.messages:
-                    conversation.append(msg)
-                    if hasattr(msg, 'name') and msg.name:
-                        participants_used.add(msg.name)
+        async for event in self._workflow.run_stream(task):
+            # Handle AgentRunUpdateEvent - captures streaming agent responses
+            if AgentRunUpdateEvent and isinstance(event, AgentRunUpdateEvent):
+                if event.executor_id:
+                    participants_used.add(event.executor_id)
+                if event.data and hasattr(event.data, 'text') and event.data.text:
+                    last_text = event.data.text
 
-        final_output = ""
-        if conversation:
-            final_output = conversation[-1].text if hasattr(conversation[-1], 'text') else str(conversation[-1])
+            # Handle WorkflowOutputEvent - captures final conversation
+            elif WorkflowOutputEvent and isinstance(event, WorkflowOutputEvent):
+                if event.data and isinstance(event.data, list):
+                    conversation = event.data
+
+        # Get final output from last text or conversation
+        final_output = last_text
+        if not final_output and conversation:
+            last_msg = conversation[-1]
+            if hasattr(last_msg, 'text'):
+                final_output = last_msg.text
+            elif isinstance(last_msg, dict) and 'text' in last_msg:
+                final_output = last_msg['text']
+            else:
+                final_output = str(last_msg)
 
         return OrchestrationResult(
             final_output=final_output,
@@ -960,15 +1006,31 @@ class ConcurrentOrchestrator:
 
         conversation = []
         participants_used = set(agent.name for agent in self.agents)
+        last_text = ""
 
-        async for response in self._workflow.run_stream(task):
-            if hasattr(response, 'messages'):
-                for msg in response.messages:
-                    conversation.append(msg)
+        async for event in self._workflow.run_stream(task):
+            # Handle AgentRunUpdateEvent - captures streaming agent responses
+            if AgentRunUpdateEvent and isinstance(event, AgentRunUpdateEvent):
+                if event.executor_id:
+                    participants_used.add(event.executor_id)
+                if event.data and hasattr(event.data, 'text') and event.data.text:
+                    last_text = event.data.text
 
-        final_output = ""
-        if conversation:
-            final_output = conversation[-1].text if hasattr(conversation[-1], 'text') else str(conversation[-1])
+            # Handle WorkflowOutputEvent - captures final conversation
+            elif WorkflowOutputEvent and isinstance(event, WorkflowOutputEvent):
+                if event.data and isinstance(event.data, list):
+                    conversation = event.data
+
+        # Get final output from last text or conversation
+        final_output = last_text
+        if not final_output and conversation:
+            last_msg = conversation[-1]
+            if hasattr(last_msg, 'text'):
+                final_output = last_msg.text
+            elif isinstance(last_msg, dict) and 'text' in last_msg:
+                final_output = last_msg['text']
+            else:
+                final_output = str(last_msg)
 
         return OrchestrationResult(
             final_output=final_output,
@@ -1028,7 +1090,8 @@ class MagenticOrchestrator:
 
     def _build_workflow(self):
         """Build the MAF workflow."""
-        inner_agents = [agent._agent for agent in self.participants]
+        # MagenticBuilder.participants() expects keyword arguments
+        inner_agents = {agent.name: agent._agent for agent in self.participants}
 
         # Create the standard magentic manager
         manager = StandardMagenticManager(
@@ -1040,7 +1103,7 @@ class MagenticOrchestrator:
         )
 
         builder = MagenticBuilder()
-        builder = builder.participants(inner_agents)
+        builder = builder.participants(**inner_agents)
         builder = builder.set_manager(manager, display_name="Magentic")
 
         return builder.build()
@@ -1053,18 +1116,32 @@ class MagenticOrchestrator:
         conversation = []
         participants_used = set()
         rounds = 0
+        last_text = ""
 
-        async for response in self._workflow.run_stream(task):
-            if hasattr(response, 'messages'):
-                for msg in response.messages:
-                    conversation.append(msg)
-                    if hasattr(msg, 'name') and msg.name:
-                        participants_used.add(msg.name)
-            rounds += 1
+        async for event in self._workflow.run_stream(task):
+            # Handle AgentRunUpdateEvent - captures streaming agent responses
+            if AgentRunUpdateEvent and isinstance(event, AgentRunUpdateEvent):
+                if event.executor_id:
+                    participants_used.add(event.executor_id)
+                if event.data and hasattr(event.data, 'text') and event.data.text:
+                    last_text = event.data.text
+                rounds += 1
 
-        final_output = ""
-        if conversation:
-            final_output = conversation[-1].text if hasattr(conversation[-1], 'text') else str(conversation[-1])
+            # Handle WorkflowOutputEvent - captures final conversation
+            elif WorkflowOutputEvent and isinstance(event, WorkflowOutputEvent):
+                if event.data and isinstance(event.data, list):
+                    conversation = event.data
+
+        # Get final output from last text or conversation
+        final_output = last_text
+        if not final_output and conversation:
+            last_msg = conversation[-1]
+            if hasattr(last_msg, 'text'):
+                final_output = last_msg.text
+            elif isinstance(last_msg, dict) and 'text' in last_msg:
+                final_output = last_msg['text']
+            else:
+                final_output = str(last_msg)
 
         return OrchestrationResult(
             final_output=final_output,
