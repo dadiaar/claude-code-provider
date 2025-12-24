@@ -47,7 +47,9 @@ from typing import Any, Callable, TypeVar, TYPE_CHECKING
 from collections.abc import Sequence
 import asyncio
 import json
+import os
 import signal
+import stat
 import hashlib
 from pathlib import Path
 from datetime import datetime
@@ -272,8 +274,33 @@ class CheckpointManager:
         self.checkpoint_dir.mkdir(parents=True, exist_ok=True)
 
     def _get_checkpoint_path(self, checkpoint_id: str) -> Path:
-        """Get file path for a checkpoint."""
-        return self.checkpoint_dir / f"{checkpoint_id}.json"
+        """Get file path for a checkpoint.
+
+        Args:
+            checkpoint_id: The checkpoint ID.
+
+        Returns:
+            Path to the checkpoint file.
+
+        Raises:
+            ValueError: If checkpoint_id contains invalid characters or path traversal.
+        """
+        # Validate checkpoint ID format (alphanumeric, underscores, hyphens only)
+        if not checkpoint_id or not all(c.isalnum() or c in '_-' for c in checkpoint_id):
+            raise ValueError(
+                f"Invalid checkpoint ID format: '{checkpoint_id}'. "
+                "Only alphanumeric characters, underscores, and hyphens are allowed."
+            )
+
+        path = self.checkpoint_dir / f"{checkpoint_id}.json"
+
+        # Ensure path is within checkpoint directory (prevent path traversal)
+        try:
+            path.resolve().relative_to(self.checkpoint_dir.resolve())
+        except ValueError:
+            raise ValueError(f"Checkpoint path traversal detected: {checkpoint_id}")
+
+        return path
 
     def generate_checkpoint_id(self, task: str, orchestration_type: str) -> str:
         """Generate a unique checkpoint ID based on task and type.
@@ -290,7 +317,7 @@ class CheckpointManager:
         return f"{orchestration_type}_{hash_part}"
 
     def save(self, checkpoint: Checkpoint) -> Path:
-        """Save a checkpoint to disk.
+        """Save a checkpoint to disk with secure permissions.
 
         Args:
             checkpoint: Checkpoint to save.
@@ -317,8 +344,21 @@ class CheckpointManager:
         }
 
         path = self._get_checkpoint_path(checkpoint.checkpoint_id)
+
+        # Ensure directory has secure permissions (owner only)
+        try:
+            os.chmod(self.checkpoint_dir, stat.S_IRWXU)  # 0o700
+        except OSError:
+            pass  # May fail on some filesystems
+
         with open(path, "w") as f:
             json.dump(data, f, indent=2)
+
+        # Set secure file permissions (owner read/write only)
+        try:
+            os.chmod(path, stat.S_IRUSR | stat.S_IWUSR)  # 0o600
+        except OSError:
+            pass  # May fail on some filesystems
 
         return path
 

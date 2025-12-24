@@ -6,6 +6,7 @@ import asyncio
 import json
 import logging
 import os
+import stat
 from dataclasses import dataclass, field
 from datetime import datetime
 from pathlib import Path
@@ -171,14 +172,27 @@ class SessionManager:
                 logger.warning(f"Failed to load sessions: {e}")
 
     def _save_sessions(self) -> None:
-        """Save sessions to storage."""
+        """Save sessions to storage with secure permissions."""
         try:
+            # Create directory with secure permissions (owner only)
             self.storage_path.parent.mkdir(parents=True, exist_ok=True)
+            try:
+                os.chmod(self.storage_path.parent, stat.S_IRWXU)  # 0o700
+            except OSError:
+                pass  # May fail on some filesystems
+
             data = {
                 "sessions": [s.to_dict() for s in self._sessions.values()],
                 "updated_at": datetime.now().isoformat(),
             }
             self.storage_path.write_text(json.dumps(data, indent=2))
+
+            # Set secure file permissions (owner read/write only)
+            try:
+                os.chmod(self.storage_path, stat.S_IRUSR | stat.S_IWUSR)  # 0o600
+            except OSError:
+                pass  # May fail on some filesystems
+
         except Exception as e:
             logger.warning(f"Failed to save sessions: {e}")
 
