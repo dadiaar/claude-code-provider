@@ -1093,18 +1093,15 @@ class MagenticOrchestrator:
         # MagenticBuilder.participants() expects keyword arguments
         inner_agents = {agent.name: agent._agent for agent in self.participants}
 
-        # Create the standard magentic manager
-        manager = StandardMagenticManager(
+        builder = MagenticBuilder()
+        builder = builder.participants(**inner_agents)
+        # Use with_standard_manager with the agent and configuration
+        builder = builder.with_standard_manager(
             agent=self.manager_agent._agent,
             max_stall_count=self.config.max_stall_count,
             max_reset_count=self.config.max_reset_count,
             max_round_count=self.config.max_round_count,
-            progress_ledger_retry_count=self.config.progress_ledger_retry_count,
         )
-
-        builder = MagenticBuilder()
-        builder = builder.participants(**inner_agents)
-        builder = builder.set_manager(manager, display_name="Magentic")
 
         return builder.build()
 
