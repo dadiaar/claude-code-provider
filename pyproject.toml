@@ -35,7 +35,7 @@ classifiers = [
 ]
 dependencies = [
     "pydantic>=2.0",
-    "agent-framework @ git+https://github.com/microsoft/agent-framework.git#subdirectory=python/packages/core",
+    "agent-framework @ git+https://github.com/microsoft/agent-framework.git@python-1.0.0b251218#subdirectory=python/packages/core",
 ]
 
 [project.optional-dependencies]
