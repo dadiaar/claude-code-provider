@@ -5,11 +5,90 @@
 import asyncio
 import json
 import logging
+import re
 from dataclasses import dataclass, field
 from enum import Enum
 from typing import Any
 
 logger = logging.getLogger("claude_code_provider")
+
+
+# Validation patterns for MCP server configuration
+_SERVER_NAME_PATTERN = re.compile(r'^[a-zA-Z][a-zA-Z0-9_-]*$')
+_ENV_VAR_NAME_PATTERN = re.compile(r'^[A-Za-z_][A-Za-z0-9_]*$')
+# Dangerous shell metacharacters that should not appear in commands/args
+_DANGEROUS_CHARS = set(';&|`$(){}[]<>!#')
+
+
+def _validate_server_name(name: str) -> str:
+    """Validate MCP server name.
+
+    Args:
+        name: Server name to validate.
+
+    Returns:
+        The validated name.
+
+    Raises:
+        ValueError: If name is invalid.
+    """
+    if not name or not isinstance(name, str):
+        raise ValueError("Server name must be a non-empty string")
+    if len(name) > 64:
+        raise ValueError("Server name must be at most 64 characters")
+    if not _SERVER_NAME_PATTERN.match(name):
+        raise ValueError(
+            f"Server name '{name}' is invalid. Must start with a letter and "
+            "contain only alphanumeric characters, underscores, or hyphens."
+        )
+    return name
+
+
+def _validate_env_var_name(name: str) -> str:
+    """Validate environment variable name.
+
+    Args:
+        name: Environment variable name to validate.
+
+    Returns:
+        The validated name.
+
+    Raises:
+        ValueError: If name is invalid.
+    """
+    if not name or not isinstance(name, str):
+        raise ValueError("Environment variable name must be a non-empty string")
+    if not _ENV_VAR_NAME_PATTERN.match(name):
+        raise ValueError(
+            f"Environment variable name '{name}' is invalid. Must start with "
+            "a letter or underscore and contain only alphanumeric characters or underscores."
+        )
+    return name
+
+
+def _validate_command_or_arg(value: str, field_name: str = "value") -> str:
+    """Validate a command or argument for dangerous characters.
+
+    Args:
+        value: The value to validate.
+        field_name: Name of the field for error messages.
+
+    Returns:
+        The validated value.
+
+    Raises:
+        ValueError: If value contains dangerous characters.
+    """
+    if not isinstance(value, str):
+        raise ValueError(f"{field_name} must be a string")
+
+    dangerous_found = _DANGEROUS_CHARS.intersection(value)
+    if dangerous_found:
+        raise ValueError(
+            f"{field_name} contains dangerous characters: {dangerous_found}. "
+            "Shell metacharacters are not allowed for security reasons."
+        )
+    return value
 
 
 class MCPTransport(str, Enum):
@@ -29,6 +108,12 @@ class MCPServer:
         transport: Transport type (stdio, http, sse).
         args: Additional arguments for stdio commands.
         env: Environment variables to set.
+
+    Security Note:
+        Environment variables passed via `env` may be visible in process
+        listings (e.g., `ps aux`). For sensitive values like API keys,
+        consider configuring MCP servers directly in Claude Code's settings
+        file (`~/.claude/settings.json`) instead of programmatically.
     """
     name: str
     command_or_url: str
@@ -36,8 +121,32 @@ class MCPServer:
     args: list[str] = field(default_factory=list)
     env: dict[str, str] = field(default_factory=dict)
 
-    def to_cli_args(self) -> list[str]:
-        """Convert to CLI arguments for --mcp-config."""
+    def __post_init__(self) -> None:
+        """Validate all fields after initialization."""
+        # Validate server name
+        _validate_server_name(self.name)
+
+        # For stdio transport, validate command and args for dangerous characters
+        if self.transport == MCPTransport.STDIO:
+            _validate_command_or_arg(self.command_or_url, "command")
+            for i, arg in enumerate(self.args):
+                _validate_command_or_arg(arg, f"args[{i}]")
+
+        # Validate environment variable names
+        for env_name in self.env.keys():
+            _validate_env_var_name(env_name)
+
+    def to_cli_args(self, include_env: bool = True) -> list[str]:
+        """Convert to CLI arguments for --mcp-config.
+
+        Args:
+            include_env: If True, include env vars in config JSON.
+                Set to False and use get_subprocess_env() for more secure
+                handling of sensitive environment variables.
+
+        Returns:
+            CLI arguments for --mcp-config.
+        """
         config = {
             "name": self.name,
             "transport": self.transport.value,
@@ -47,12 +156,27 @@ class MCPServer:
             config["command"] = self.command_or_url
             if self.args:
                 config["args"] = self.args
-            if self.env:
+            if self.env and include_env:
                 config["env"] = self.env
         else:
             config["url"] = self.command_or_url
 
         return ["--mcp-config", json.dumps(config)]
+
+    def get_subprocess_env(self) -> dict[str, str]:
+        """Get environment variables for subprocess execution.
+
+        This is more secure than passing env vars through CLI arguments,
+        as subprocess environment is not visible in process listings.
+
+        Returns:
+            Dictionary of environment variables to pass to subprocess.
+        """
+        import os
+        # Start with current environment and add server-specific vars
+        env = os.environ.copy()
+        env.update(self.env)
+        return env
 
     def to_dict(self) -> dict[str, Any]:
         """Convert to dictionary."""
@@ -225,6 +349,11 @@ class MCPManager:
 
         Returns:
             True if successful.
+
+        Security Note:
+            Environment variables in server.env will be passed as CLI
+            arguments and may be visible in process listings. For sensitive
+            values, configure MCP servers directly in Claude Code's settings.
         """
         try:
             cmd = [
@@ -233,7 +362,7 @@ class MCPManager:
                 server.name, server.command_or_url,
             ]
 
-            # Add env vars
+            # Add env vars (warning: visible in process listings)
             for key, value in server.env.items():
                 cmd.extend(["--env", f"{key}={value}"])
 

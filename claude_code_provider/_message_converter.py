@@ -99,17 +99,9 @@ def chat_options_to_cli_args(options: ChatOptions) -> list[str]:
     """
     args: list[str] = []
 
-    # Model
-    if options.model_id:
-        # Map common model names to CLI aliases
-        model = options.model_id
-        if "sonnet" in model.lower():
-            model = "sonnet"
-        elif "opus" in model.lower():
-            model = "opus"
-        elif "haiku" in model.lower():
-            model = "haiku"
-        args.extend(["--model", model])
+    # Note: Model is passed separately via the 'model' parameter, not extra_args.
+    # The model_id from chat_options is returned directly in prepare_cli_execution
+    # and handled by _build_args in the CLI executor.
 
     # Note: Claude CLI doesn't support these directly:
     # - temperature

@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "claude-code-provider"
-version = "0.1.0"
+version = "0.2.0"
 description = "Claude Code CLI provider for Microsoft Agent Framework"
 readme = "README.md"
 license = {text = "Proprietary - All Rights Reserved"}
@@ -35,6 +35,10 @@ classifiers = [
 ]
 dependencies = [
     "pydantic>=2.0",
+    # agent-framework is required but not on PyPI - install from:
+    # https://github.com/microsoft/agent-framework
+    # pip install -e python/packages/core
+    "agent-framework>=1.0.0b0",
 ]
 
 [project.optional-dependencies]

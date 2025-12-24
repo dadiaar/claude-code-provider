@@ -4,9 +4,11 @@
 
 import asyncio
 import logging
+import re
 from dataclasses import dataclass, field
 from datetime import datetime
 from enum import Enum
+from string import Template
 from typing import Any, Callable, TypeVar
 
 logger = logging.getLogger("claude_code_provider")
@@ -334,7 +336,10 @@ class BatchProcessor:
         prompts = []
         for item in items:
             variables = transform(item)
-            prompt = prompt_template.format(**variables)
+            # Use safe_substitute to prevent format string injection attacks
+            # Convert {var} syntax to $var for Template compatibility
+            safe_template = re.sub(r'\{(\w+)\}', r'$\1', prompt_template)
+            prompt = Template(safe_template).safe_substitute(variables)
             prompts.append(prompt)
 
         return await self.process_batch(
@@ -393,8 +398,9 @@ class BatchProcessor:
             for i, r in enumerate(map_result.get_successful_results())
         )
 
-        # Reduce phase
-        final_prompt = reduce_prompt.format(results=combined)
+        # Reduce phase - use safe template substitution to prevent injection
+        safe_reduce_template = re.sub(r'\{(\w+)\}', r'$\1', reduce_prompt)
+        final_prompt = Template(safe_reduce_template).safe_substitute(results=combined)
         response = await self.client.get_response(
             final_prompt,
             system_prompt=system_prompt,

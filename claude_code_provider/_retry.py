@@ -133,6 +133,10 @@ class CircuitBreaker:
         failure_threshold: Number of failures before opening circuit.
         recovery_timeout: Seconds to wait before trying again.
         success_threshold: Successes needed in HALF_OPEN to close circuit.
+
+    Note:
+        This implementation is thread-safe for async contexts using asyncio.Lock.
+        All state mutations are protected by the lock.
     """
 
     failure_threshold: int = 5
@@ -144,51 +148,55 @@ class CircuitBreaker:
     _successes: int = field(default=0, repr=False)
     _state: str = field(default="CLOSED", repr=False)
     _last_failure_time: float | None = field(default=None, repr=False)
+    _lock: asyncio.Lock = field(default_factory=asyncio.Lock, repr=False)
 
-    def record_success(self) -> None:
-        """Record a successful call."""
-        if self._state == "HALF_OPEN":
-            self._successes += 1
-            if self._successes >= self.success_threshold:
-                self._close()
-        elif self._state == "CLOSED":
-            # Reset failure count on success
-            self._failures = 0
+    async def record_success(self) -> None:
+        """Record a successful call (async for thread safety)."""
+        async with self._lock:
+            if self._state == "HALF_OPEN":
+                self._successes += 1
+                if self._successes >= self.success_threshold:
+                    self._close()
+            elif self._state == "CLOSED":
+                # Reset failure count on success
+                self._failures = 0
 
-    def record_failure(self) -> None:
-        """Record a failed call."""
+    async def record_failure(self) -> None:
+        """Record a failed call (async for thread safety)."""
         import time
 
-        self._failures += 1
-        self._last_failure_time = time.time()
+        async with self._lock:
+            self._failures += 1
+            self._last_failure_time = time.time()
 
-        if self._state == "HALF_OPEN":
-            self._open()
-        elif self._state == "CLOSED" and self._failures >= self.failure_threshold:
-            self._open()
+            if self._state == "HALF_OPEN":
+                self._open()
+            elif self._state == "CLOSED" and self._failures >= self.failure_threshold:
+                self._open()
 
-    def can_execute(self) -> bool:
-        """Check if a call can be executed.
+    async def can_execute(self) -> bool:
+        """Check if a call can be executed (async for thread safety).
 
         Returns:
             True if the call should proceed, False if circuit is open.
         """
         import time
 
-        if self._state == "CLOSED":
+        async with self._lock:
+            if self._state == "CLOSED":
+                return True
+
+            if self._state == "OPEN":
+                # Check if recovery timeout has passed
+                if self._last_failure_time is not None:
+                    elapsed = time.time() - self._last_failure_time
+                    if elapsed >= self.recovery_timeout:
+                        self._half_open()
+                        return True
+                return False
+
+            # HALF_OPEN - allow the request
             return True
-
-        if self._state == "OPEN":
-            # Check if recovery timeout has passed
-            if self._last_failure_time is not None:
-                elapsed = time.time() - self._last_failure_time
-                if elapsed >= self.recovery_timeout:
-                    self._half_open()
-                    return True
-            return False
-
-        # HALF_OPEN - allow the request
-        return True
 
     def _open(self) -> None:
         """Open the circuit."""

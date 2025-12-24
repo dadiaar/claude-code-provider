@@ -28,15 +28,24 @@ except ImportError:
 # Default timeout for CLI execution (5 minutes)
 DEFAULT_TIMEOUT_SECONDS = 300.0
 
+# Default timeout for streaming read operations (60 seconds)
+# Shorter than execution timeout since streaming should have regular data
+DEFAULT_STREAM_READ_TIMEOUT = 60.0
+
 # Maximum prompt size (1MB - generous but prevents memory issues)
 MAX_PROMPT_SIZE = 1_000_000
 
+# Maximum CLI argument size before switching to stdin (100KB)
+# Linux ARG_MAX is typically 128KB-2MB, use 100KB to be safe
+MAX_CLI_ARG_SIZE = 100_000
+
 # Allowed CLI flags that can be passed via extra_args
 # This whitelist prevents injection of dangerous flags
+# Note: --dangerously-skip-permissions is NOT included here for security.
+# Use the skip_permissions parameter in execute() if absolutely needed.
 ALLOWED_EXTRA_ARGS = frozenset({
     "--verbose", "-v",
     "--no-cache",
-    "--dangerously-skip-permissions",  # User explicitly opts in
 })
 
 logger = logging.getLogger("claude_code_provider")
@@ -63,14 +72,18 @@ def _validate_prompt(prompt: str) -> str:
     if len(prompt) == 0:
         raise ValueError("Prompt cannot be empty")
 
-    # Remove null bytes (could truncate strings in C libraries)
-    prompt = prompt.replace('\x00', '')
+    # Reject null bytes (security risk - could truncate strings in C libraries)
+    if '\x00' in prompt:
+        raise ValueError("Prompt contains null bytes which are not allowed")
 
     return prompt
 
 
 def _validate_extra_args(extra_args: list[str] | None) -> list[str]:
     """Validate extra CLI arguments against whitelist.
+
+    Only whitelisted flag arguments (starting with -) are allowed.
+    Non-flag arguments are rejected to prevent injection attacks.
 
     Args:
         extra_args: List of extra arguments.
@@ -79,7 +92,7 @@ def _validate_extra_args(extra_args: list[str] | None) -> list[str]:
         Validated list of arguments.
 
     Raises:
-        ValueError: If any argument is not in the whitelist.
+        ValueError: If any argument is not in the whitelist or is not a flag.
     """
     if not extra_args:
         return []
@@ -89,13 +102,18 @@ def _validate_extra_args(extra_args: list[str] | None) -> list[str]:
         if not isinstance(arg, str):
             raise ValueError(f"Extra argument must be a string, got {type(arg)}")
 
+        # Reject non-flag arguments to prevent injection
+        if not arg.startswith("-"):
+            raise ValueError(
+                f"Only flag arguments (starting with -) are allowed, got '{arg}'"
+            )
+
         # Check if it's an allowed flag
-        if arg.startswith("-"):
-            if arg not in ALLOWED_EXTRA_ARGS:
-                raise ValueError(
-                    f"CLI argument '{arg}' is not allowed. "
-                    f"Allowed args: {', '.join(sorted(ALLOWED_EXTRA_ARGS))}"
-                )
+        if arg not in ALLOWED_EXTRA_ARGS:
+            raise ValueError(
+                f"CLI argument '{arg}' is not allowed. "
+                f"Allowed args: {', '.join(sorted(ALLOWED_EXTRA_ARGS))}"
+            )
         validated.append(arg)
 
     return validated
@@ -263,7 +281,7 @@ class CLIExecutor:
             ClaudeCodeParseError: If response parsing fails.
         """
         # Check circuit breaker
-        if self.circuit_breaker and not self.circuit_breaker.can_execute():
+        if self.circuit_breaker and not await self.circuit_breaker.can_execute():
             raise ClaudeCodeExecutionError(
                 message="Circuit breaker is open - too many recent failures. "
                         f"Recovery in {self.circuit_breaker.recovery_timeout}s.",
@@ -309,7 +327,7 @@ class CLIExecutor:
         """Execute CLI once (internal method used by retry wrapper)."""
         effective_timeout = timeout if timeout is not None else self.timeout
 
-        args = self._build_args(
+        args, stdin_prompt = self._build_args(
             prompt=prompt,
             session_id=session_id,
             system_prompt=system_prompt,
@@ -320,17 +338,23 @@ class CLIExecutor:
         )
 
         try:
+            # Use stdin for large prompts to avoid ARG_MAX limit
+            stdin_pipe = asyncio.subprocess.PIPE if stdin_prompt else None
+
             process = await asyncio.create_subprocess_exec(
                 self.settings.cli_path,
                 *args,
+                stdin=stdin_pipe,
                 stdout=asyncio.subprocess.PIPE,
                 stderr=asyncio.subprocess.PIPE,
                 cwd=self.settings.working_directory,
             )
 
             try:
+                # Pass prompt via stdin if needed
+                stdin_data = stdin_prompt.encode() if stdin_prompt else None
                 stdout, stderr = await asyncio.wait_for(
-                    process.communicate(),
+                    process.communicate(input=stdin_data),
                     timeout=effective_timeout,
                 )
             except asyncio.TimeoutError:
@@ -338,14 +362,14 @@ class CLIExecutor:
                 process.kill()
                 await process.wait()
                 if self.circuit_breaker:
-                    self.circuit_breaker.record_failure()
+                    await self.circuit_breaker.record_failure()
                 raise ClaudeCodeTimeoutError(timeout_seconds=effective_timeout)
 
             if process.returncode != 0:
                 error_msg = stderr.decode() if stderr else f"Exit code: {process.returncode}"
                 logger.error(f"Claude CLI failed: {error_msg}")
                 if self.circuit_breaker:
-                    self.circuit_breaker.record_failure()
+                    await self.circuit_breaker.record_failure()
                 raise ClaudeCodeExecutionError(
                     message=f"Claude CLI failed: {error_msg}",
                     exit_code=process.returncode,
@@ -358,7 +382,7 @@ class CLIExecutor:
             except json.JSONDecodeError as e:
                 logger.error(f"Failed to parse CLI response: {e}")
                 if self.circuit_breaker:
-                    self.circuit_breaker.record_failure()
+                    await self.circuit_breaker.record_failure()
                 raise ClaudeCodeParseError(
                     message=f"Failed to parse CLI JSON response: {e}",
                     raw_output=stdout.decode(),
@@ -370,9 +394,9 @@ class CLIExecutor:
             # Check if the response itself indicates an error
             is_error = response.get("is_error", False)
             if is_error and self.circuit_breaker:
-                self.circuit_breaker.record_failure()
+                await self.circuit_breaker.record_failure()
             elif self.circuit_breaker:
-                self.circuit_breaker.record_success()
+                await self.circuit_breaker.record_success()
 
             return CLIResult(
                 success=not is_error,
@@ -390,7 +414,7 @@ class CLIExecutor:
         except Exception as e:
             logger.exception(f"Failed to execute Claude CLI: {e}")
             if self.circuit_breaker:
-                self.circuit_breaker.record_failure()
+                await self.circuit_breaker.record_failure()
             raise ClaudeCodeExecutionError(
                 message=f"Unexpected error executing Claude CLI: {e}",
                 exit_code=None,
@@ -406,6 +430,7 @@ class CLIExecutor:
         model: str | None = None,
         max_turns: int | None = None,
         extra_args: list[str] | None = None,
+        stream_timeout: float | None = None,
     ) -> AsyncIterator[StreamEvent]:
         """Execute a Claude CLI command with streaming output.
 
@@ -416,11 +441,20 @@ class CLIExecutor:
             model: Optional model override.
             max_turns: Optional max turns override.
             extra_args: Additional CLI arguments.
+            stream_timeout: Timeout for each streaming read operation in seconds.
+                Defaults to DEFAULT_STREAM_READ_TIMEOUT (60 seconds).
 
         Yields:
             StreamEvent objects as they arrive.
+
+        Raises:
+            ClaudeCodeTimeoutError: If streaming read times out.
         """
-        args = self._build_args(
+        effective_stream_timeout = (
+            stream_timeout if stream_timeout is not None
+            else DEFAULT_STREAM_READ_TIMEOUT
+        )
+        args, stdin_prompt = self._build_args(
             prompt=prompt,
             session_id=session_id,
             system_prompt=system_prompt,
@@ -432,20 +466,43 @@ class CLIExecutor:
 
         process = None
         try:
+            # Use stdin for large prompts to avoid ARG_MAX limit
+            stdin_pipe = asyncio.subprocess.PIPE if stdin_prompt else None
+
             process = await asyncio.create_subprocess_exec(
                 self.settings.cli_path,
                 *args,
+                stdin=stdin_pipe,
                 stdout=asyncio.subprocess.PIPE,
                 stderr=asyncio.subprocess.PIPE,
                 cwd=self.settings.working_directory,
             )
+
+            # Write stdin prompt if needed and close stdin
+            if stdin_prompt and process.stdin:
+                process.stdin.write(stdin_prompt.encode())
+                await process.stdin.drain()
+                process.stdin.close()
+                await process.stdin.wait_closed()
 
             if process.stdout is None:
                 return
 
             # Read line by line for stream-json format
             while True:
-                line = await process.stdout.readline()
+                try:
+                    line = await asyncio.wait_for(
+                        process.stdout.readline(),
+                        timeout=effective_stream_timeout,
+                    )
+                except asyncio.TimeoutError:
+                    logger.error(
+                        f"Streaming read timed out after {effective_stream_timeout}s"
+                    )
+                    raise ClaudeCodeTimeoutError(
+                        timeout_seconds=effective_stream_timeout
+                    )
+
                 if not line:
                     break
 
@@ -463,6 +520,9 @@ class CLIExecutor:
 
             await process.wait()
 
+        except ClaudeCodeTimeoutError:
+            # Re-raise timeout errors without wrapping
+            raise
         except Exception as e:
             logger.exception(f"Failed to execute Claude CLI stream: {e}")
             yield StreamEvent(
@@ -497,7 +557,7 @@ class CLIExecutor:
         max_turns: int | None = None,
         streaming: bool = False,
         extra_args: list[str] | None = None,
-    ) -> list[str]:
+    ) -> tuple[list[str], str | None]:
         """Build CLI arguments for execution.
 
         Args:
@@ -510,7 +570,9 @@ class CLIExecutor:
             extra_args: Additional CLI arguments (whitelisted only).
 
         Returns:
-            List of CLI arguments.
+            Tuple of (list of CLI arguments, optional stdin prompt).
+            If the prompt is large, it will be returned as stdin_prompt
+            instead of being included in args.
 
         Raises:
             ValueError: If prompt or extra_args are invalid.
@@ -519,7 +581,16 @@ class CLIExecutor:
         validated_prompt = _validate_prompt(prompt)
         validated_extra_args = _validate_extra_args(extra_args)
 
-        args = ["-p", validated_prompt]
+        # Determine if prompt should be passed via stdin (for large prompts)
+        use_stdin = len(validated_prompt) > MAX_CLI_ARG_SIZE
+        stdin_prompt = validated_prompt if use_stdin else None
+
+        if use_stdin:
+            # Use stdin for large prompt - don't include -p flag, prompt comes from stdin
+            args = []
+            logger.debug(f"Using stdin for large prompt ({len(validated_prompt)} bytes)")
+        else:
+            args = ["-p", validated_prompt]
 
         # Output format
         if streaming:
@@ -536,9 +607,21 @@ class CLIExecutor:
         if session_id:
             args.extend(["--resume", session_id])
 
-        # System prompt
+        # System prompt (also check for size)
         if system_prompt:
-            args.extend(["--system-prompt", system_prompt])
+            if len(system_prompt) > MAX_CLI_ARG_SIZE:
+                # For large system prompts, prepend to the user prompt in stdin
+                if stdin_prompt:
+                    # Both are large - combine them
+                    stdin_prompt = f"{system_prompt}\n\n---\n\n{validated_prompt}"
+                else:
+                    # Only system prompt is large - add user prompt to stdin too
+                    stdin_prompt = f"{system_prompt}\n\n---\n\n{validated_prompt}"
+                    # Remove the -p arg we added earlier since prompt is now in stdin
+                    args = [a for a in args if a != "-p" and a != validated_prompt]
+                logger.debug(f"Using stdin for large system prompt ({len(system_prompt)} bytes)")
+            else:
+                args.extend(["--system-prompt", system_prompt])
 
         # Max turns (use override, then settings)
         effective_max_turns = max_turns if max_turns is not None else self.settings.default_max_turns
@@ -552,4 +635,4 @@ class CLIExecutor:
         if validated_extra_args:
             args.extend(validated_extra_args)
 
-        return args
+        return args, stdin_prompt

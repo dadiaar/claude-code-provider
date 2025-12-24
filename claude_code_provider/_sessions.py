@@ -15,6 +15,51 @@ from typing import Any
 logger = logging.getLogger("claude_code_provider")
 
 
+# Directories that should not be written to for security
+_FORBIDDEN_PATHS = frozenset({
+    "/etc", "/bin", "/sbin", "/usr/bin", "/usr/sbin",
+    "/boot", "/dev", "/proc", "/sys", "/var/run",
+    "/lib", "/lib64", "/usr/lib", "/usr/lib64",
+})
+
+
+def _validate_export_path(path: Path) -> Path:
+    """Validate that an export path is safe to write to.
+
+    Args:
+        path: Path to validate.
+
+    Returns:
+        Validated absolute path.
+
+    Raises:
+        ValueError: If path is invalid or unsafe.
+    """
+    # Resolve to absolute path to catch traversal attempts
+    resolved = path.resolve()
+
+    # Check against forbidden directories
+    path_str = str(resolved)
+    for forbidden in _FORBIDDEN_PATHS:
+        if path_str == forbidden or path_str.startswith(forbidden + "/"):
+            raise ValueError(
+                f"Cannot write to system directory: {forbidden}"
+            )
+
+    # Ensure parent directory exists or can be created
+    parent = resolved.parent
+    if not parent.exists():
+        # Check parent path too before creating
+        parent_str = str(parent)
+        for forbidden in _FORBIDDEN_PATHS:
+            if parent_str == forbidden or parent_str.startswith(forbidden + "/"):
+                raise ValueError(
+                    f"Cannot create directory in system path: {forbidden}"
+                )
+
+    return resolved
+
+
 @dataclass
 class SessionInfo:
     """Information about a session.
@@ -91,10 +136,15 @@ class SessionExport:
 
         Args:
             path: File path to save to.
+
+        Raises:
+            ValueError: If path is to a system directory.
         """
         path = Path(path)
-        path.write_text(self.to_json())
-        logger.info(f"Session exported to {path}")
+        # Validate path to prevent traversal to sensitive directories
+        validated_path = _validate_export_path(path)
+        validated_path.write_text(self.to_json())
+        logger.info(f"Session exported to {validated_path}")
 
     @classmethod
     def load(cls, path: str | Path) -> "SessionExport":

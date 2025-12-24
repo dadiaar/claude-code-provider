@@ -211,7 +211,7 @@ class TestCLIExecutor:
         settings = ClaudeCodeSettings(model="haiku")
         executor = CLIExecutor(settings)
 
-        args = executor._build_args(
+        args, stdin_prompt = executor._build_args(
             prompt="Test prompt",
             streaming=False,
         )
@@ -222,6 +222,7 @@ class TestCLIExecutor:
         assert "json" in args
         assert "--model" in args
         assert "haiku" in args
+        assert stdin_prompt is None  # Small prompt uses args, not stdin
 
     def test_build_args_streaming(self):
         """Test streaming argument building."""
@@ -231,7 +232,7 @@ class TestCLIExecutor:
         settings = ClaudeCodeSettings()
         executor = CLIExecutor(settings)
 
-        args = executor._build_args(
+        args, stdin_prompt = executor._build_args(
             prompt="Test",
             streaming=True,
         )
@@ -239,6 +240,7 @@ class TestCLIExecutor:
         assert "--output-format" in args
         assert "stream-json" in args
         assert "--verbose" in args
+        assert stdin_prompt is None
 
     def test_build_args_with_session(self):
         """Test session resumption args."""
@@ -248,7 +250,7 @@ class TestCLIExecutor:
         settings = ClaudeCodeSettings()
         executor = CLIExecutor(settings)
 
-        args = executor._build_args(
+        args, stdin_prompt = executor._build_args(
             prompt="Test",
             session_id="my-session-123",
             streaming=False,
@@ -256,6 +258,7 @@ class TestCLIExecutor:
 
         assert "--resume" in args
         assert "my-session-123" in args
+        assert stdin_prompt is None
 
     def test_build_args_with_system_prompt(self):
         """Test system prompt args."""
@@ -265,7 +268,7 @@ class TestCLIExecutor:
         settings = ClaudeCodeSettings()
         executor = CLIExecutor(settings)
 
-        args = executor._build_args(
+        args, stdin_prompt = executor._build_args(
             prompt="Test",
             system_prompt="You are a helper.",
             streaming=False,
@@ -273,6 +276,25 @@ class TestCLIExecutor:
 
         assert "--system-prompt" in args
         assert "You are a helper." in args
+        assert stdin_prompt is None
+
+    def test_build_args_large_prompt_uses_stdin(self):
+        """Test that large prompts are passed via stdin."""
+        from claude_code_provider._settings import ClaudeCodeSettings
+        from claude_code_provider._cli_executor import CLIExecutor, MAX_CLI_ARG_SIZE
+
+        settings = ClaudeCodeSettings()
+        executor = CLIExecutor(settings)
+
+        # Create a prompt larger than MAX_CLI_ARG_SIZE
+        large_prompt = "x" * (MAX_CLI_ARG_SIZE + 1000)
+        args, stdin_prompt = executor._build_args(
+            prompt=large_prompt,
+            streaming=False,
+        )
+
+        assert "-p" not in args  # No -p flag for large prompts
+        assert stdin_prompt == large_prompt  # Prompt passed via stdin
 
     def test_executor_with_timeout(self):
         """Test executor respects timeout setting."""
@@ -342,36 +364,45 @@ class TestRetry:
         """Test circuit breaker starts closed."""
         from claude_code_provider._retry import CircuitBreaker
 
-        cb = CircuitBreaker()
-        assert cb.state == "CLOSED"
-        assert cb.can_execute() is True
+        async def run():
+            cb = CircuitBreaker()
+            assert cb.state == "CLOSED"
+            assert await cb.can_execute() is True
+
+        asyncio.run(run())
 
     def test_circuit_breaker_opens_after_failures(self):
         """Test circuit breaker opens after threshold failures."""
         from claude_code_provider._retry import CircuitBreaker
 
-        cb = CircuitBreaker(failure_threshold=3)
+        async def run():
+            cb = CircuitBreaker(failure_threshold=3)
 
-        cb.record_failure()
-        assert cb.state == "CLOSED"
-        cb.record_failure()
-        assert cb.state == "CLOSED"
-        cb.record_failure()
-        assert cb.state == "OPEN"
-        assert cb.can_execute() is False
+            await cb.record_failure()
+            assert cb.state == "CLOSED"
+            await cb.record_failure()
+            assert cb.state == "CLOSED"
+            await cb.record_failure()
+            assert cb.state == "OPEN"
+            assert await cb.can_execute() is False
+
+        asyncio.run(run())
 
     def test_circuit_breaker_success_resets_failures(self):
         """Test success resets failure count."""
         from claude_code_provider._retry import CircuitBreaker
 
-        cb = CircuitBreaker(failure_threshold=3)
+        async def run():
+            cb = CircuitBreaker(failure_threshold=3)
 
-        cb.record_failure()
-        cb.record_failure()
-        cb.record_success()  # Reset!
-        cb.record_failure()
-        cb.record_failure()
-        assert cb.state == "CLOSED"  # Didn't reach threshold
+            await cb.record_failure()
+            await cb.record_failure()
+            await cb.record_success()  # Reset!
+            await cb.record_failure()
+            await cb.record_failure()
+            assert cb.state == "CLOSED"  # Didn't reach threshold
+
+        asyncio.run(run())
 
 
 class TestClaudeAgent:
@@ -1859,6 +1890,236 @@ class TestFeedbackLoopAdvanced:
 
 
 # =============================================================================
+# SECURITY TESTS
+# =============================================================================
+
+class TestSecurity:
+    """Security-focused tests for vulnerability prevention."""
+
+    def test_format_string_injection_prevention(self):
+        """Test that format string injection is prevented in batch processing."""
+        from claude_code_provider._batch import BatchProcessor
+        import re
+        from string import Template
+
+        # Test the safe_substitute approach directly
+        prompt_template = "Process {item}"
+        variables = {"item": "test"}
+
+        # This is what the code does now - convert to Template syntax
+        safe_template = re.sub(r'\{(\w+)\}', r'$\1', prompt_template)
+        result = Template(safe_template).safe_substitute(variables)
+        assert result == "Process test"
+
+        # Test that malicious format strings don't expose internals
+        malicious_template = "{__class__.__init__.__globals__}"
+        safe_malicious = re.sub(r'\{(\w+)\}', r'$\1', malicious_template)
+        result = Template(safe_malicious).safe_substitute({})
+        # Should NOT execute the format string attack - returns unchanged
+        assert "__class__" in result  # The literal string, not evaluated
+
+    def test_cli_argument_validation_rejects_non_flags(self):
+        """Test that non-flag arguments are rejected."""
+        from claude_code_provider._cli_executor import _validate_extra_args
+
+        # Valid flag arguments should work
+        valid_args = ["--verbose", "-v", "--no-cache"]
+        result = _validate_extra_args(valid_args)
+        assert result == valid_args
+
+        # Non-flag arguments should be rejected
+        try:
+            _validate_extra_args(["malicious_command"])
+            assert False, "Should raise ValueError for non-flag arguments"
+        except ValueError as e:
+            assert "Only flag arguments" in str(e)
+
+        # Injection attempts should be rejected (non-flag after valid flag)
+        try:
+            _validate_extra_args(["--verbose", "rm -rf /"])
+            assert False, "Should reject non-flag arguments"
+        except ValueError as e:
+            assert "Only flag arguments" in str(e)
+
+    def test_dangerous_skip_permissions_not_allowed(self):
+        """Test that --dangerously-skip-permissions is not in allowed args."""
+        from claude_code_provider._cli_executor import ALLOWED_EXTRA_ARGS
+
+        assert "--dangerously-skip-permissions" not in ALLOWED_EXTRA_ARGS
+
+    def test_mcp_server_name_validation(self):
+        """Test MCP server name validation."""
+        from claude_code_provider._mcp import _validate_server_name
+
+        # Valid names
+        assert _validate_server_name("my-server") == "my-server"
+        assert _validate_server_name("server_123") == "server_123"
+        assert _validate_server_name("MyServer") == "MyServer"
+
+        # Invalid names
+        try:
+            _validate_server_name("")
+            assert False, "Should reject empty name"
+        except ValueError:
+            pass
+
+        try:
+            _validate_server_name("123invalid")  # Starts with number
+            assert False, "Should reject names starting with numbers"
+        except ValueError:
+            pass
+
+        try:
+            _validate_server_name("a" * 100)  # Too long
+            assert False, "Should reject names over 64 chars"
+        except ValueError:
+            pass
+
+    def test_mcp_command_validation(self):
+        """Test MCP command/argument validation for dangerous characters."""
+        from claude_code_provider._mcp import _validate_command_or_arg
+
+        # Valid commands
+        assert _validate_command_or_arg("npx") == "npx"
+        assert _validate_command_or_arg("/usr/bin/python") == "/usr/bin/python"
+
+        # Commands with dangerous characters should be rejected
+        dangerous_tests = [
+            "cmd; rm -rf /",
+            "cmd && malicious",
+            "cmd | cat /etc/passwd",
+            "$(whoami)",
+            "`whoami`",
+            "cmd > /tmp/output",
+            "cmd < /etc/shadow",
+        ]
+        for cmd in dangerous_tests:
+            try:
+                _validate_command_or_arg(cmd)
+                assert False, f"Should reject: {cmd}"
+            except ValueError as e:
+                assert "dangerous characters" in str(e)
+
+    def test_mcp_env_var_name_validation(self):
+        """Test MCP environment variable name validation."""
+        from claude_code_provider._mcp import _validate_env_var_name
+
+        # Valid env var names
+        assert _validate_env_var_name("API_KEY") == "API_KEY"
+        assert _validate_env_var_name("_PRIVATE") == "_PRIVATE"
+        assert _validate_env_var_name("myVar123") == "myVar123"
+
+        # Invalid env var names
+        try:
+            _validate_env_var_name("123INVALID")  # Starts with number
+            assert False, "Should reject names starting with numbers"
+        except ValueError:
+            pass
+
+        try:
+            _validate_env_var_name("VAR-NAME")  # Contains hyphen
+            assert False, "Should reject names with hyphens"
+        except ValueError:
+            pass
+
+    def test_mcp_server_validates_on_creation(self):
+        """Test that MCPServer validates fields on creation."""
+        from claude_code_provider import MCPServer, MCPTransport
+
+        # Valid server should work
+        server = MCPServer(
+            name="valid-server",
+            command_or_url="npx",
+            transport=MCPTransport.STDIO,
+        )
+        assert server.name == "valid-server"
+
+        # Invalid name should fail
+        try:
+            MCPServer(
+                name="123-invalid",
+                command_or_url="npx",
+                transport=MCPTransport.STDIO,
+            )
+            assert False, "Should reject invalid server name"
+        except ValueError:
+            pass
+
+        # Dangerous command should fail for STDIO transport
+        try:
+            MCPServer(
+                name="test",
+                command_or_url="npx; rm -rf /",
+                transport=MCPTransport.STDIO,
+            )
+            assert False, "Should reject dangerous command"
+        except ValueError:
+            pass
+
+        # HTTP transport doesn't validate command for dangerous chars
+        server = MCPServer(
+            name="test",
+            command_or_url="http://example.com?param=value",
+            transport=MCPTransport.HTTP,
+        )
+        assert server.command_or_url == "http://example.com?param=value"
+
+    def test_session_export_path_traversal_prevention(self):
+        """Test that session export prevents path traversal to system dirs."""
+        from claude_code_provider._sessions import _validate_export_path
+        from pathlib import Path
+
+        # Valid paths should work
+        valid = _validate_export_path(Path("/tmp/session.json"))
+        assert valid == Path("/tmp/session.json")
+
+        valid = _validate_export_path(Path("./session.json"))
+        # Should resolve to absolute path in current directory
+        assert valid.is_absolute()
+
+        # System directories should be rejected
+        forbidden = ["/etc/passwd", "/bin/test", "/usr/bin/test", "/boot/test"]
+        for path_str in forbidden:
+            try:
+                _validate_export_path(Path(path_str))
+                assert False, f"Should reject system path: {path_str}"
+            except ValueError as e:
+                assert "system directory" in str(e)
+
+    def test_streaming_timeout_constant_exists(self):
+        """Test that streaming timeout constant is defined."""
+        from claude_code_provider._cli_executor import DEFAULT_STREAM_READ_TIMEOUT
+
+        assert DEFAULT_STREAM_READ_TIMEOUT > 0
+        assert DEFAULT_STREAM_READ_TIMEOUT <= 120  # Should be reasonable
+
+    def test_prompt_size_limit(self):
+        """Test that prompt size is validated."""
+        from claude_code_provider._cli_executor import _validate_prompt, MAX_PROMPT_SIZE
+
+        # Normal prompt should work
+        result = _validate_prompt("Hello")
+        assert result == "Hello"
+
+        # Too large prompt should fail
+        try:
+            _validate_prompt("x" * (MAX_PROMPT_SIZE + 1))
+            assert False, "Should reject prompts over size limit"
+        except ValueError as e:
+            assert "exceeds maximum" in str(e).lower()
+
+    def test_prompt_null_byte_rejection(self):
+        """Test that null bytes in prompts are rejected."""
+        from claude_code_provider._cli_executor import _validate_prompt
+
+        try:
+            _validate_prompt("hello\x00world")
+            assert False, "Should reject null bytes"
+        except ValueError as e:
+            assert "null" in str(e).lower() or "invalid" in str(e).lower()
+
+
+# =============================================================================
 # TEST RUNNER
 # =============================================================================
 
@@ -1881,6 +2142,7 @@ def run_unit_tests():
         TestLogging,
         TestSessionManagement,
         TestBatchProcessing,
+        TestSecurity,
         TestOrchestration,
         TestLimitProfiles,
         TestCheckpointing,
