@@ -634,9 +634,9 @@ class TestIntegration:
             response = await client.get_response(
                 "What is the first word in README.md? Just the word, nothing else."
             )
-            # README starts with "# Swarm"
+            # README starts with "# Claude Code Provider"
             text = response.messages[0].text.lower()
-            assert "swarm" in text or "#" in text
+            assert "claude" in text or "#" in text
             return True
 
         result = asyncio.run(run())
@@ -1121,6 +1121,743 @@ class TestBatchProcessing:
         assert processor.retry_failed is True
 
 
+class TestOrchestration:
+    """Test orchestration builders."""
+
+    def test_orchestration_result(self):
+        """Test OrchestrationResult creation."""
+        from claude_code_provider import OrchestrationResult
+
+        result = OrchestrationResult(
+            final_output="Final text",
+            conversation=[],
+            rounds=5,
+            participants_used={"agent1", "agent2"},
+            metadata={"type": "test"},
+        )
+        assert result.final_output == "Final text"
+        assert result.rounds == 5
+        assert "agent1" in result.participants_used
+
+    def test_group_chat_config(self):
+        """Test GroupChatConfig creation."""
+        from claude_code_provider import GroupChatConfig
+
+        config = GroupChatConfig(
+            max_rounds=10,
+            manager_display_name="coordinator",
+        )
+        assert config.max_rounds == 10
+        assert config.manager_display_name == "coordinator"
+        assert config.termination_condition is None
+
+    def test_handoff_config(self):
+        """Test HandoffConfig creation."""
+        from claude_code_provider import HandoffConfig
+
+        config = HandoffConfig(
+            autonomous=True,
+            autonomous_turn_limit=30,
+        )
+        assert config.autonomous is True
+        assert config.autonomous_turn_limit == 30
+
+    def test_magentic_config(self):
+        """Test MagenticConfig creation."""
+        from claude_code_provider import MagenticConfig
+
+        config = MagenticConfig(
+            max_stall_count=5,
+            max_reset_count=2,
+        )
+        assert config.max_stall_count == 5
+        assert config.max_reset_count == 2
+
+    def test_feedback_loop_orchestrator_creation(self):
+        """Test FeedbackLoopOrchestrator creation."""
+        from claude_code_provider import ClaudeCodeClient, FeedbackLoopOrchestrator
+
+        client = ClaudeCodeClient(model="haiku")
+        worker = client.create_agent(name="worker", instructions="Do work")
+        reviewer = client.create_agent(name="reviewer", instructions="Review work")
+
+        orchestrator = FeedbackLoopOrchestrator(
+            worker=worker,
+            reviewer=reviewer,
+            max_iterations=3,
+        )
+        assert orchestrator.worker.name == "worker"
+        assert orchestrator.reviewer.name == "reviewer"
+        assert orchestrator.max_iterations == 3
+
+    def test_feedback_loop_custom_approval(self):
+        """Test FeedbackLoopOrchestrator with custom approval check."""
+        from claude_code_provider import ClaudeCodeClient, FeedbackLoopOrchestrator
+
+        client = ClaudeCodeClient(model="haiku")
+        worker = client.create_agent(name="worker", instructions="Do work")
+        reviewer = client.create_agent(name="reviewer", instructions="Review work")
+
+        orchestrator = FeedbackLoopOrchestrator(
+            worker=worker,
+            reviewer=reviewer,
+            approval_check=lambda t: "LGTM" in t,
+        )
+
+        # Test approval check
+        assert orchestrator.approval_check("LGTM, great work!") is True
+        assert orchestrator.approval_check("Needs revision") is False
+
+    def test_create_review_loop_helper(self):
+        """Test create_review_loop helper function."""
+        from claude_code_provider import (
+            ClaudeCodeClient,
+            FeedbackLoopOrchestrator,
+            create_review_loop,
+        )
+
+        client = ClaudeCodeClient(model="haiku")
+        agents = {
+            "worker": client.create_agent(name="worker", instructions="Work"),
+            "reviewer": client.create_agent(name="reviewer", instructions="Review"),
+        }
+
+        orchestrator = create_review_loop(agents, max_iterations=7)
+        assert isinstance(orchestrator, FeedbackLoopOrchestrator)
+        assert orchestrator.max_iterations == 7
+
+    def test_create_pipeline_helper(self):
+        """Test create_pipeline helper function."""
+        from claude_code_provider import (
+            ClaudeCodeClient,
+            SequentialOrchestrator,
+            create_pipeline,
+            MAF_ORCHESTRATION_AVAILABLE,
+        )
+
+        if not MAF_ORCHESTRATION_AVAILABLE:
+            # Skip if MAF orchestration not available
+            return
+
+        client = ClaudeCodeClient(model="haiku")
+        agents = [
+            client.create_agent(name="agent1", instructions="Step 1"),
+            client.create_agent(name="agent2", instructions="Step 2"),
+        ]
+
+        orchestrator = create_pipeline(agents)
+        assert isinstance(orchestrator, SequentialOrchestrator)
+        assert len(orchestrator.agents) == 2
+
+    def test_create_parallel_analysis_helper(self):
+        """Test create_parallel_analysis helper function."""
+        from claude_code_provider import (
+            ClaudeCodeClient,
+            ConcurrentOrchestrator,
+            create_parallel_analysis,
+            MAF_ORCHESTRATION_AVAILABLE,
+        )
+
+        if not MAF_ORCHESTRATION_AVAILABLE:
+            return
+
+        client = ClaudeCodeClient(model="haiku")
+        analysts = [
+            client.create_agent(name="analyst1", instructions="Analyze"),
+            client.create_agent(name="analyst2", instructions="Analyze"),
+        ]
+
+        orchestrator = create_parallel_analysis(analysts)
+        assert isinstance(orchestrator, ConcurrentOrchestrator)
+        assert len(orchestrator.agents) == 2
+
+    def test_client_create_feedback_loop(self):
+        """Test ClaudeCodeClient.create_feedback_loop method."""
+        from claude_code_provider import ClaudeCodeClient, FeedbackLoopOrchestrator
+
+        client = ClaudeCodeClient(model="haiku")
+        worker = client.create_agent(name="dev", instructions="Write code")
+        reviewer = client.create_agent(name="reviewer", instructions="Review code")
+
+        orchestrator = client.create_feedback_loop(
+            worker=worker,
+            reviewer=reviewer,
+            max_iterations=4,
+        )
+        assert isinstance(orchestrator, FeedbackLoopOrchestrator)
+        assert orchestrator.max_iterations == 4
+
+    def test_client_create_sequential(self):
+        """Test ClaudeCodeClient.create_sequential method."""
+        from claude_code_provider import ClaudeCodeClient, MAF_ORCHESTRATION_AVAILABLE
+
+        if not MAF_ORCHESTRATION_AVAILABLE:
+            return
+
+        from claude_code_provider import SequentialOrchestrator
+
+        client = ClaudeCodeClient(model="haiku")
+        agents = [
+            client.create_agent(name="a1", instructions="Step 1"),
+            client.create_agent(name="a2", instructions="Step 2"),
+        ]
+
+        orchestrator = client.create_sequential(agents)
+        assert isinstance(orchestrator, SequentialOrchestrator)
+
+    def test_client_create_concurrent(self):
+        """Test ClaudeCodeClient.create_concurrent method."""
+        from claude_code_provider import ClaudeCodeClient, MAF_ORCHESTRATION_AVAILABLE
+
+        if not MAF_ORCHESTRATION_AVAILABLE:
+            return
+
+        from claude_code_provider import ConcurrentOrchestrator
+
+        client = ClaudeCodeClient(model="haiku")
+        agents = [
+            client.create_agent(name="a1", instructions="Analyze"),
+            client.create_agent(name="a2", instructions="Analyze"),
+        ]
+
+        orchestrator = client.create_concurrent(agents)
+        assert isinstance(orchestrator, ConcurrentOrchestrator)
+
+    def test_client_create_group_chat(self):
+        """Test ClaudeCodeClient.create_group_chat method."""
+        from claude_code_provider import ClaudeCodeClient, MAF_ORCHESTRATION_AVAILABLE
+
+        if not MAF_ORCHESTRATION_AVAILABLE:
+            return
+
+        from claude_code_provider import GroupChatOrchestrator
+
+        client = ClaudeCodeClient(model="haiku")
+        agents = [
+            client.create_agent(name="dev", instructions="Code"),
+            client.create_agent(name="reviewer", instructions="Review"),
+        ]
+
+        def select_speaker(state):
+            return "dev"
+
+        orchestrator = client.create_group_chat(
+            participants=agents,
+            manager=select_speaker,
+            max_rounds=10,
+        )
+        assert isinstance(orchestrator, GroupChatOrchestrator)
+
+    def test_client_create_handoff(self):
+        """Test ClaudeCodeClient.create_handoff method."""
+        from claude_code_provider import ClaudeCodeClient, MAF_ORCHESTRATION_AVAILABLE
+
+        if not MAF_ORCHESTRATION_AVAILABLE:
+            return
+
+        from claude_code_provider import HandoffOrchestrator
+
+        client = ClaudeCodeClient(model="haiku")
+        coordinator = client.create_agent(name="coordinator", instructions="Route")
+        specialists = [
+            client.create_agent(name="billing", instructions="Handle billing"),
+            client.create_agent(name="technical", instructions="Handle tech"),
+        ]
+
+        orchestrator = client.create_handoff(
+            coordinator=coordinator,
+            specialists=specialists,
+            autonomous=True,
+        )
+        assert isinstance(orchestrator, HandoffOrchestrator)
+
+
+class TestLimitProfiles:
+    """Test limit profiles and model timeouts."""
+
+    def test_limit_profiles_exist(self):
+        """Test that all expected profiles exist."""
+        from claude_code_provider import LIMIT_PROFILES
+
+        expected = ["demo", "standard", "extended", "unlimited"]
+        for name in expected:
+            assert name in LIMIT_PROFILES, f"Missing profile: {name}"
+
+    def test_limit_profile_structure(self):
+        """Test that profiles have required fields."""
+        from claude_code_provider import LIMIT_PROFILES
+
+        required_fields = ["description", "max_iterations", "timeout_seconds", "checkpoint_enabled"]
+        for name, profile in LIMIT_PROFILES.items():
+            for field in required_fields:
+                assert field in profile, f"Profile {name} missing field: {field}"
+
+    def test_limit_profile_values(self):
+        """Test that profile values are correct."""
+        from claude_code_provider import LIMIT_PROFILES
+
+        # Check demo profile
+        assert LIMIT_PROFILES["demo"]["max_iterations"] == 5
+        assert LIMIT_PROFILES["demo"]["timeout_seconds"] == 300  # 5 min
+
+        # Check standard profile
+        assert LIMIT_PROFILES["standard"]["max_iterations"] == 20
+        assert LIMIT_PROFILES["standard"]["timeout_seconds"] == 3600  # 1 hour
+
+        # Check extended profile
+        assert LIMIT_PROFILES["extended"]["max_iterations"] == 100
+        assert LIMIT_PROFILES["extended"]["timeout_seconds"] == 7200  # 2 hours
+
+        # Check unlimited profile
+        assert LIMIT_PROFILES["unlimited"]["max_iterations"] == 500
+        assert LIMIT_PROFILES["unlimited"]["timeout_seconds"] == 14400  # 4 hours
+
+    def test_checkpoint_disabled_by_default(self):
+        """Test that checkpointing is disabled by default for security."""
+        from claude_code_provider import LIMIT_PROFILES
+
+        for name, profile in LIMIT_PROFILES.items():
+            assert profile["checkpoint_enabled"] is False, \
+                f"Profile {name} has checkpoint_enabled=True (should be False for security)"
+
+    def test_get_limit_profile(self):
+        """Test get_limit_profile function."""
+        from claude_code_provider import get_limit_profile
+
+        # Get standard profile
+        profile = get_limit_profile("standard")
+        assert profile["max_iterations"] == 20
+        assert profile["timeout_seconds"] == 3600
+
+        # Profile is a copy, not reference
+        profile["max_iterations"] = 999
+        original = get_limit_profile("standard")
+        assert original["max_iterations"] == 20
+
+    def test_get_limit_profile_default(self):
+        """Test get_limit_profile returns default when None."""
+        from claude_code_provider import get_limit_profile
+
+        profile = get_limit_profile(None)
+        assert profile["max_iterations"] == 20  # standard profile
+
+    def test_get_limit_profile_invalid(self):
+        """Test get_limit_profile raises on invalid name."""
+        from claude_code_provider import get_limit_profile
+
+        try:
+            get_limit_profile("nonexistent")
+            assert False, "Should raise ValueError"
+        except ValueError as e:
+            assert "nonexistent" in str(e)
+
+    def test_model_timeouts_exist(self):
+        """Test that MODEL_TIMEOUTS has expected models."""
+        from claude_code_provider import MODEL_TIMEOUTS
+
+        expected = ["haiku", "sonnet", "opus", "default"]
+        for model in expected:
+            assert model in MODEL_TIMEOUTS, f"Missing model: {model}"
+
+    def test_model_timeout_values(self):
+        """Test model timeout values."""
+        from claude_code_provider import MODEL_TIMEOUTS
+
+        assert MODEL_TIMEOUTS["haiku"] == 600      # 10 min
+        assert MODEL_TIMEOUTS["sonnet"] == 1800    # 30 min
+        assert MODEL_TIMEOUTS["opus"] == 3600      # 60 min
+        assert MODEL_TIMEOUTS["default"] == 1800   # 30 min
+
+    def test_get_model_timeout(self):
+        """Test get_model_timeout function."""
+        from claude_code_provider import get_model_timeout
+
+        assert get_model_timeout("haiku") == 600
+        assert get_model_timeout("sonnet") == 1800
+        assert get_model_timeout("opus") == 3600
+
+    def test_get_model_timeout_case_insensitive(self):
+        """Test get_model_timeout is case insensitive."""
+        from claude_code_provider import get_model_timeout
+
+        assert get_model_timeout("HAIKU") == 600
+        assert get_model_timeout("Sonnet") == 1800
+        assert get_model_timeout("OPUS") == 3600
+
+    def test_get_model_timeout_fallback(self):
+        """Test get_model_timeout returns default for unknown models."""
+        from claude_code_provider import get_model_timeout, MODEL_TIMEOUTS
+
+        assert get_model_timeout("unknown") == MODEL_TIMEOUTS["default"]
+        assert get_model_timeout("gpt-4") == MODEL_TIMEOUTS["default"]
+
+
+class TestCheckpointing:
+    """Test checkpointing system."""
+
+    def test_checkpoint_creation(self):
+        """Test Checkpoint dataclass creation."""
+        from claude_code_provider import Checkpoint
+
+        checkpoint = Checkpoint(
+            checkpoint_id="test_123",
+            orchestration_type="feedback_loop",
+            task="Test task",
+            conversation=[{"role": "assistant", "text": "Hello"}],
+            current_iteration=2,
+            current_work="Some work",
+            feedback="Some feedback",
+            participants_used=["worker", "reviewer"],
+            metadata={"key": "value"},
+            created_at="2025-01-01T00:00:00",
+            updated_at="2025-01-01T00:01:00",
+            status="in_progress",
+        )
+        assert checkpoint.checkpoint_id == "test_123"
+        assert checkpoint.current_iteration == 2
+        assert checkpoint.status == "in_progress"
+
+    def test_checkpoint_manager_creation(self):
+        """Test CheckpointManager creation."""
+        from claude_code_provider import CheckpointManager
+        import tempfile
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            manager = CheckpointManager(tmpdir)
+            assert manager.checkpoint_dir.exists()
+
+    def test_checkpoint_manager_generate_id(self):
+        """Test CheckpointManager.generate_checkpoint_id."""
+        from claude_code_provider import CheckpointManager
+        import tempfile
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            manager = CheckpointManager(tmpdir)
+
+            id1 = manager.generate_checkpoint_id("task1", "feedback_loop")
+            id2 = manager.generate_checkpoint_id("task1", "feedback_loop")
+            id3 = manager.generate_checkpoint_id("task2", "feedback_loop")
+
+            # Same task = same ID
+            assert id1 == id2
+            # Different task = different ID
+            assert id1 != id3
+            # Contains orchestration type
+            assert "feedback_loop" in id1
+
+    def test_checkpoint_manager_save_load(self):
+        """Test CheckpointManager save and load."""
+        from claude_code_provider import CheckpointManager, Checkpoint
+        import tempfile
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            manager = CheckpointManager(tmpdir)
+
+            checkpoint = Checkpoint(
+                checkpoint_id="test_save",
+                orchestration_type="feedback_loop",
+                task="Test task",
+                conversation=[],
+                current_iteration=3,
+                current_work="Work content",
+                feedback="Feedback content",
+                participants_used=["w", "r"],
+                metadata={"test": True},
+                created_at="2025-01-01T00:00:00",
+                updated_at="2025-01-01T00:00:00",
+                status="in_progress",
+            )
+
+            # Save
+            path = manager.save(checkpoint)
+            assert path.exists()
+
+            # Load
+            loaded = manager.load("test_save")
+            assert loaded is not None
+            assert loaded.checkpoint_id == "test_save"
+            assert loaded.current_iteration == 3
+            assert loaded.current_work == "Work content"
+            assert loaded.status == "in_progress"
+
+    def test_checkpoint_manager_exists(self):
+        """Test CheckpointManager.exists."""
+        from claude_code_provider import CheckpointManager, Checkpoint
+        import tempfile
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            manager = CheckpointManager(tmpdir)
+
+            assert manager.exists("nonexistent") is False
+
+            checkpoint = Checkpoint(
+                checkpoint_id="exists_test",
+                orchestration_type="feedback_loop",
+                task="Test",
+                conversation=[],
+                current_iteration=1,
+                current_work="",
+                feedback="",
+                participants_used=[],
+                metadata={},
+                created_at="",
+                updated_at="",
+                status="in_progress",
+            )
+            manager.save(checkpoint)
+
+            assert manager.exists("exists_test") is True
+
+    def test_checkpoint_manager_clear(self):
+        """Test CheckpointManager.clear (single)."""
+        from claude_code_provider import CheckpointManager, Checkpoint
+        import tempfile
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            manager = CheckpointManager(tmpdir)
+
+            checkpoint = Checkpoint(
+                checkpoint_id="clear_test",
+                orchestration_type="feedback_loop",
+                task="Test",
+                conversation=[],
+                current_iteration=1,
+                current_work="",
+                feedback="",
+                participants_used=[],
+                metadata={},
+                created_at="",
+                updated_at="",
+                status="in_progress",
+            )
+            manager.save(checkpoint)
+            assert manager.exists("clear_test") is True
+
+            result = manager.clear("clear_test")
+            assert result is True
+            assert manager.exists("clear_test") is False
+
+            # Clear nonexistent returns False
+            result = manager.clear("nonexistent")
+            assert result is False
+
+    def test_checkpoint_manager_clear_all(self):
+        """Test CheckpointManager.clear_all."""
+        from claude_code_provider import CheckpointManager, Checkpoint
+        import tempfile
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            manager = CheckpointManager(tmpdir)
+
+            # Create multiple checkpoints
+            for i in range(5):
+                checkpoint = Checkpoint(
+                    checkpoint_id=f"batch_{i}",
+                    orchestration_type="feedback_loop",
+                    task=f"Task {i}",
+                    conversation=[],
+                    current_iteration=i,
+                    current_work="",
+                    feedback="",
+                    participants_used=[],
+                    metadata={},
+                    created_at="",
+                    updated_at="",
+                    status="in_progress",
+                )
+                manager.save(checkpoint)
+
+            assert len(manager.list_checkpoints()) == 5
+
+            count = manager.clear_all()
+            assert count == 5
+            assert len(manager.list_checkpoints()) == 0
+
+    def test_checkpoint_manager_list(self):
+        """Test CheckpointManager.list_checkpoints."""
+        from claude_code_provider import CheckpointManager, Checkpoint
+        import tempfile
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            manager = CheckpointManager(tmpdir)
+
+            # Create checkpoints
+            for i in range(3):
+                checkpoint = Checkpoint(
+                    checkpoint_id=f"list_{i}",
+                    orchestration_type="feedback_loop",
+                    task=f"Task {i}",
+                    conversation=[],
+                    current_iteration=i,
+                    current_work="",
+                    feedback="",
+                    participants_used=[],
+                    metadata={},
+                    created_at="",
+                    updated_at="",
+                    status="in_progress",
+                )
+                manager.save(checkpoint)
+
+            checkpoints = manager.list_checkpoints()
+            assert len(checkpoints) == 3
+            ids = [c.checkpoint_id for c in checkpoints]
+            assert "list_0" in ids
+            assert "list_1" in ids
+            assert "list_2" in ids
+
+    def test_clear_checkpoints_function(self):
+        """Test clear_checkpoints convenience function."""
+        from claude_code_provider import clear_checkpoints, CheckpointManager, Checkpoint
+        import tempfile
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            manager = CheckpointManager(tmpdir)
+
+            # Create a checkpoint
+            checkpoint = Checkpoint(
+                checkpoint_id="func_test",
+                orchestration_type="feedback_loop",
+                task="Test",
+                conversation=[],
+                current_iteration=1,
+                current_work="",
+                feedback="",
+                participants_used=[],
+                metadata={},
+                created_at="",
+                updated_at="",
+                status="in_progress",
+            )
+            manager.save(checkpoint)
+
+            count = clear_checkpoints(tmpdir)
+            assert count == 1
+
+
+class TestGracefulStop:
+    """Test graceful stop handler."""
+
+    def test_stop_handler_creation(self):
+        """Test GracefulStopHandler creation."""
+        from claude_code_provider import GracefulStopHandler
+
+        handler = GracefulStopHandler()
+        assert handler.should_stop is False
+
+    def test_stop_handler_reset(self):
+        """Test GracefulStopHandler.reset."""
+        from claude_code_provider import GracefulStopHandler
+
+        handler = GracefulStopHandler()
+        handler.should_stop = True
+        assert handler.should_stop is True
+
+        handler.reset()
+        assert handler.should_stop is False
+
+    def test_get_stop_handler(self):
+        """Test get_stop_handler returns global handler."""
+        from claude_code_provider import get_stop_handler
+
+        handler1 = get_stop_handler()
+        handler2 = get_stop_handler()
+        assert handler1 is handler2
+
+    def test_stop_handler_register_unregister(self):
+        """Test GracefulStopHandler register/unregister."""
+        from claude_code_provider import GracefulStopHandler
+
+        handler = GracefulStopHandler()
+
+        # Should not raise
+        handler.register()
+        handler.unregister()
+
+
+class TestFeedbackLoopAdvanced:
+    """Advanced tests for FeedbackLoopOrchestrator."""
+
+    def test_orchestrator_default_checkpoint_disabled(self):
+        """Test that checkpointing is disabled by default."""
+        from claude_code_provider import ClaudeCodeClient, FeedbackLoopOrchestrator
+
+        client = ClaudeCodeClient(model="haiku")
+        worker = client.create_agent(name="w", instructions="Work")
+        reviewer = client.create_agent(name="r", instructions="Review")
+
+        orchestrator = FeedbackLoopOrchestrator(worker=worker, reviewer=reviewer)
+        assert orchestrator.checkpoint_enabled is False
+        assert orchestrator.checkpoint_manager is None
+
+    def test_orchestrator_checkpoint_enabled(self):
+        """Test enabling checkpointing."""
+        from claude_code_provider import ClaudeCodeClient, FeedbackLoopOrchestrator
+        import tempfile
+
+        client = ClaudeCodeClient(model="haiku")
+        worker = client.create_agent(name="w", instructions="Work")
+        reviewer = client.create_agent(name="r", instructions="Review")
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            orchestrator = FeedbackLoopOrchestrator(
+                worker=worker,
+                reviewer=reviewer,
+                checkpoint_enabled=True,
+                checkpoint_dir=tmpdir,
+            )
+            assert orchestrator.checkpoint_enabled is True
+            assert orchestrator.checkpoint_manager is not None
+
+    def test_orchestrator_with_profile(self):
+        """Test creating orchestrator with limit profile."""
+        from claude_code_provider import (
+            ClaudeCodeClient,
+            FeedbackLoopOrchestrator,
+            get_limit_profile,
+        )
+
+        client = ClaudeCodeClient(model="haiku")
+        worker = client.create_agent(name="w", instructions="Work")
+        reviewer = client.create_agent(name="r", instructions="Review")
+
+        profile = get_limit_profile("extended")
+        orchestrator = FeedbackLoopOrchestrator(
+            worker=worker,
+            reviewer=reviewer,
+            max_iterations=profile["max_iterations"],
+            timeout_seconds=profile["timeout_seconds"],
+        )
+        assert orchestrator.max_iterations == 100
+        assert orchestrator.timeout_seconds == 7200
+
+    def test_orchestrator_serialization(self):
+        """Test conversation serialization/deserialization."""
+        from claude_code_provider import ClaudeCodeClient, FeedbackLoopOrchestrator
+        from agent_framework import ChatMessage, Role
+
+        client = ClaudeCodeClient(model="haiku")
+        worker = client.create_agent(name="w", instructions="Work")
+        reviewer = client.create_agent(name="r", instructions="Review")
+
+        orchestrator = FeedbackLoopOrchestrator(worker=worker, reviewer=reviewer)
+
+        # Test serialization
+        messages = [
+            ChatMessage(role=Role.ASSISTANT, text="Hello", author_name="worker"),
+            ChatMessage(role=Role.ASSISTANT, text="Looks good", author_name="reviewer"),
+        ]
+        serialized = orchestrator._serialize_conversation(messages)
+        assert len(serialized) == 2
+        assert serialized[0]["text"] == "Hello"
+        assert serialized[0]["author_name"] == "worker"
+
+        # Test deserialization
+        deserialized = orchestrator._deserialize_conversation(serialized)
+        assert len(deserialized) == 2
+        assert deserialized[0].text == "Hello"
+
+
 # =============================================================================
 # TEST RUNNER
 # =============================================================================
@@ -1144,6 +1881,11 @@ def run_unit_tests():
         TestLogging,
         TestSessionManagement,
         TestBatchProcessing,
+        TestOrchestration,
+        TestLimitProfiles,
+        TestCheckpointing,
+        TestGracefulStop,
+        TestFeedbackLoopAdvanced,
     ]
 
     passed = 0

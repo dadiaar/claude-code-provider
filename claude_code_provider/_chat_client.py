@@ -3,7 +3,7 @@
 """Claude Code CLI Chat Client for Microsoft Agent Framework."""
 
 import logging
-from collections.abc import AsyncIterable, MutableSequence
+from collections.abc import AsyncIterable, MutableSequence, Callable
 from typing import Any, ClassVar
 
 from agent_framework import (
@@ -27,6 +27,18 @@ try:
     from ._settings import ClaudeCodeSettings
     from ._retry import RetryConfig
     from ._agent import ClaudeAgent, DEFAULT_AUTOCOMPACT_THRESHOLD
+    from ._orchestration import (
+        GroupChatOrchestrator,
+        GroupChatConfig,
+        HandoffOrchestrator,
+        HandoffConfig,
+        SequentialOrchestrator,
+        ConcurrentOrchestrator,
+        MagenticOrchestrator,
+        MagenticConfig,
+        FeedbackLoopOrchestrator,
+        MAF_ORCHESTRATION_AVAILABLE,
+    )
 except ImportError:
     from _cli_executor import CLIExecutor
     from _message_converter import prepare_cli_execution
@@ -37,6 +49,18 @@ except ImportError:
     from _settings import ClaudeCodeSettings
     from _retry import RetryConfig
     from _agent import ClaudeAgent, DEFAULT_AUTOCOMPACT_THRESHOLD
+    from _orchestration import (
+        GroupChatOrchestrator,
+        GroupChatConfig,
+        HandoffOrchestrator,
+        HandoffConfig,
+        SequentialOrchestrator,
+        ConcurrentOrchestrator,
+        MagenticOrchestrator,
+        MagenticConfig,
+        FeedbackLoopOrchestrator,
+        MAF_ORCHESTRATION_AVAILABLE,
+    )
 
 logger = logging.getLogger("claude_code_provider")
 
@@ -320,4 +344,253 @@ class ClaudeCodeClient(BaseChatClient):
             autocompact=autocompact,
             autocompact_threshold=autocompact_threshold,
             keep_last_n_messages=keep_last_n_messages,
+        )
+
+    # =========================================================================
+    # Orchestration Methods
+    # =========================================================================
+
+    def create_group_chat(
+        self,
+        participants: list[ClaudeAgent],
+        manager: Any,
+        *,
+        max_rounds: int = 15,
+        termination_condition: Any = None,
+        manager_display_name: str = "manager",
+        final_message: str | None = None,
+        cost_tracker: Any = None,
+    ) -> GroupChatOrchestrator:
+        """Create a GroupChat orchestrator for multi-agent coordination.
+
+        The manager (function or agent) selects which participant speaks next
+        based on the full conversation history.
+
+        Args:
+            participants: Agents that can be selected to speak.
+            manager: Function(state) -> str|None or ClaudeAgent that selects next speaker.
+            max_rounds: Maximum manager selection rounds.
+            termination_condition: Optional callable(conversation) -> bool.
+            manager_display_name: Display name for manager in logs.
+            final_message: Optional message when finishing.
+            cost_tracker: Optional CostTracker instance.
+
+        Returns:
+            GroupChatOrchestrator ready to run.
+
+        Example:
+            ```python
+            def select_speaker(state):
+                last = state.conversation[-1].text.lower() if state.conversation else ""
+                if "needs revision" in last:
+                    return "developer"
+                elif "approved" in last:
+                    return None  # Finish
+                return "reviewer"
+
+            orchestrator = client.create_group_chat(
+                participants=[developer, reviewer],
+                manager=select_speaker,
+                max_rounds=10,
+            )
+
+            result = await orchestrator.run("Build a REST API")
+            ```
+        """
+        if not MAF_ORCHESTRATION_AVAILABLE:
+            raise ImportError("MAF orchestration not available")
+
+        config = GroupChatConfig(
+            max_rounds=max_rounds,
+            termination_condition=termination_condition,
+            manager_display_name=manager_display_name,
+            final_message=final_message,
+        )
+
+        return GroupChatOrchestrator(
+            participants=participants,
+            manager=manager,
+            config=config,
+            cost_tracker=cost_tracker,
+        )
+
+    def create_handoff(
+        self,
+        coordinator: ClaudeAgent,
+        specialists: list[ClaudeAgent],
+        *,
+        autonomous: bool = True,
+        autonomous_turn_limit: int = 50,
+        termination_condition: Any = None,
+        enable_return_to_previous: bool = False,
+        cost_tracker: Any = None,
+    ) -> HandoffOrchestrator:
+        """Create a Handoff orchestrator for coordinator → specialist routing.
+
+        A coordinator agent routes tasks to specialists via tool calls.
+
+        Args:
+            coordinator: The routing/coordinator agent.
+            specialists: Specialist agents to route to.
+            autonomous: Run without user input between turns.
+            autonomous_turn_limit: Max turns in autonomous mode.
+            termination_condition: Optional callable(conversation) -> bool.
+            enable_return_to_previous: Allow returning to previous agent.
+            cost_tracker: Optional CostTracker instance.
+
+        Returns:
+            HandoffOrchestrator ready to run.
+
+        Example:
+            ```python
+            coordinator = client.create_agent(
+                name="coordinator",
+                instructions="Route to billing, technical, or account specialist",
+            )
+
+            orchestrator = client.create_handoff(
+                coordinator=coordinator,
+                specialists=[billing, technical, account],
+                autonomous=True,
+            )
+
+            result = await orchestrator.run("I was charged twice")
+            ```
+        """
+        if not MAF_ORCHESTRATION_AVAILABLE:
+            raise ImportError("MAF orchestration not available")
+
+        config = HandoffConfig(
+            autonomous=autonomous,
+            autonomous_turn_limit=autonomous_turn_limit,
+            termination_condition=termination_condition,
+            enable_return_to_previous=enable_return_to_previous,
+        )
+
+        return HandoffOrchestrator(
+            coordinator=coordinator,
+            specialists=specialists,
+            config=config,
+            cost_tracker=cost_tracker,
+        )
+
+    def create_sequential(
+        self,
+        agents: list[ClaudeAgent],
+        *,
+        cost_tracker: Any = None,
+    ) -> SequentialOrchestrator:
+        """Create a Sequential orchestrator for linear agent chains.
+
+        Agents process in sequence, each building on previous output.
+
+        Args:
+            agents: Agents to run in sequence.
+            cost_tracker: Optional CostTracker instance.
+
+        Returns:
+            SequentialOrchestrator ready to run.
+
+        Example:
+            ```python
+            orchestrator = client.create_sequential(
+                agents=[researcher, writer, editor],
+            )
+
+            result = await orchestrator.run("Write about AI")
+            # researcher → writer → editor
+            ```
+        """
+        if not MAF_ORCHESTRATION_AVAILABLE:
+            raise ImportError("MAF orchestration not available")
+
+        return SequentialOrchestrator(
+            agents=agents,
+            cost_tracker=cost_tracker,
+        )
+
+    def create_concurrent(
+        self,
+        agents: list[ClaudeAgent],
+        *,
+        aggregator: Any = None,
+        cost_tracker: Any = None,
+    ) -> ConcurrentOrchestrator:
+        """Create a Concurrent orchestrator for parallel execution.
+
+        Fans out input to multiple agents in parallel, then aggregates.
+
+        Args:
+            agents: Agents to run in parallel.
+            aggregator: Optional function to combine results.
+            cost_tracker: Optional CostTracker instance.
+
+        Returns:
+            ConcurrentOrchestrator ready to run.
+
+        Example:
+            ```python
+            orchestrator = client.create_concurrent(
+                agents=[analyst1, analyst2, analyst3],
+                aggregator=lambda r: "\\n---\\n".join(x.text for x in r),
+            )
+
+            result = await orchestrator.run("Analyze this data")
+            ```
+        """
+        if not MAF_ORCHESTRATION_AVAILABLE:
+            raise ImportError("MAF orchestration not available")
+
+        return ConcurrentOrchestrator(
+            agents=agents,
+            aggregator=aggregator,
+            cost_tracker=cost_tracker,
+        )
+
+    def create_feedback_loop(
+        self,
+        worker: ClaudeAgent,
+        reviewer: ClaudeAgent,
+        *,
+        max_iterations: int = 5,
+        approval_check: Any = None,
+        synthesizer: ClaudeAgent | None = None,
+        cost_tracker: Any = None,
+    ) -> FeedbackLoopOrchestrator:
+        """Create a FeedbackLoop orchestrator for iterative refinement.
+
+        Worker produces work, reviewer provides feedback, repeat until approved.
+
+        Args:
+            worker: Agent that produces/revises work.
+            reviewer: Agent that reviews and provides feedback.
+            max_iterations: Maximum review cycles.
+            approval_check: Function(text) -> bool to check approval.
+                Default checks for "approved" in text.
+            synthesizer: Optional agent for final polish.
+            cost_tracker: Optional CostTracker instance.
+
+        Returns:
+            FeedbackLoopOrchestrator ready to run.
+
+        Example:
+            ```python
+            orchestrator = client.create_feedback_loop(
+                worker=developer,
+                reviewer=code_reviewer,
+                max_iterations=5,
+                approval_check=lambda t: "LGTM" in t or "approved" in t.lower(),
+            )
+
+            result = await orchestrator.run("Write a sorting function")
+            print(f"Approved after {result.rounds} iterations")
+            ```
+        """
+        return FeedbackLoopOrchestrator(
+            worker=worker,
+            reviewer=reviewer,
+            max_iterations=max_iterations,
+            approval_check=approval_check,
+            synthesizer=synthesizer,
+            cost_tracker=cost_tracker,
         )

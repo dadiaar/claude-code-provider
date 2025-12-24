@@ -46,6 +46,41 @@ try:
     from ._logging import DebugLogger, setup_logging, LogLevel, LogEntry
     from ._sessions import SessionManager, SessionInfo, SessionExport
     from ._batch import BatchProcessor, BatchResult, BatchItem, BatchStatus
+    from ._orchestration import (
+        # Result types
+        OrchestrationResult,
+        # Config classes
+        GroupChatConfig,
+        HandoffConfig,
+        MagenticConfig,
+        # Orchestrators
+        GroupChatOrchestrator,
+        HandoffOrchestrator,
+        SequentialOrchestrator,
+        ConcurrentOrchestrator,
+        MagenticOrchestrator,
+        FeedbackLoopOrchestrator,
+        # Factory functions
+        create_review_loop,
+        create_pipeline,
+        create_parallel_analysis,
+        # Limit profiles
+        LIMIT_PROFILES,
+        MODEL_TIMEOUTS,
+        get_limit_profile,
+        get_model_timeout,
+        # Checkpointing
+        Checkpoint,
+        CheckpointManager,
+        get_checkpoint_manager,
+        clear_checkpoints,
+        # Graceful stop
+        GracefulStopHandler,
+        get_stop_handler,
+        # Availability flags
+        MAF_ORCHESTRATION_AVAILABLE,
+        MAF_MAGENTIC_AVAILABLE,
+    )
 except ImportError:
     from _settings import ClaudeCodeSettings
     from _chat_client import ClaudeCodeClient
@@ -76,6 +111,41 @@ except ImportError:
     from _logging import DebugLogger, setup_logging, LogLevel, LogEntry
     from _sessions import SessionManager, SessionInfo, SessionExport
     from _batch import BatchProcessor, BatchResult, BatchItem, BatchStatus
+    from _orchestration import (
+        # Result types
+        OrchestrationResult,
+        # Config classes
+        GroupChatConfig,
+        HandoffConfig,
+        MagenticConfig,
+        # Orchestrators
+        GroupChatOrchestrator,
+        HandoffOrchestrator,
+        SequentialOrchestrator,
+        ConcurrentOrchestrator,
+        MagenticOrchestrator,
+        FeedbackLoopOrchestrator,
+        # Factory functions
+        create_review_loop,
+        create_pipeline,
+        create_parallel_analysis,
+        # Limit profiles
+        LIMIT_PROFILES,
+        MODEL_TIMEOUTS,
+        get_limit_profile,
+        get_model_timeout,
+        # Checkpointing
+        Checkpoint,
+        CheckpointManager,
+        get_checkpoint_manager,
+        clear_checkpoints,
+        # Graceful stop
+        GracefulStopHandler,
+        get_stop_handler,
+        # Availability flags
+        MAF_ORCHESTRATION_AVAILABLE,
+        MAF_MAGENTIC_AVAILABLE,
+    )
 
 __all__ = [
     # Core
@@ -129,4 +199,34 @@ __all__ = [
     "BatchResult",
     "BatchItem",
     "BatchStatus",
+    # Orchestration
+    "OrchestrationResult",
+    "GroupChatConfig",
+    "HandoffConfig",
+    "MagenticConfig",
+    "GroupChatOrchestrator",
+    "HandoffOrchestrator",
+    "SequentialOrchestrator",
+    "ConcurrentOrchestrator",
+    "MagenticOrchestrator",
+    "FeedbackLoopOrchestrator",
+    "create_review_loop",
+    "create_pipeline",
+    "create_parallel_analysis",
+    # Limit Profiles
+    "LIMIT_PROFILES",
+    "MODEL_TIMEOUTS",
+    "get_limit_profile",
+    "get_model_timeout",
+    # Checkpointing
+    "Checkpoint",
+    "CheckpointManager",
+    "get_checkpoint_manager",
+    "clear_checkpoints",
+    # Graceful Stop
+    "GracefulStopHandler",
+    "get_stop_handler",
+    # Availability Flags
+    "MAF_ORCHESTRATION_AVAILABLE",
+    "MAF_MAGENTIC_AVAILABLE",
 ]
