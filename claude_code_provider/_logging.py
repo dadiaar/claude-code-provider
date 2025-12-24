@@ -1,14 +1,109 @@
 # Copyright (c) 2025. Claude Code Provider for Microsoft Agent Framework.
 
-"""Structured logging and debugging utilities."""
+r"""Structured logging and debugging utilities.
+
+This module provides JSON-structured logging by default for production use.
+Logs can be analyzed using various open-source tools.
+
+Log Analysis Tools (Open Source):
+---------------------------------
+1. **jq** - Command-line JSON processor (https://jqlang.github.io/jq/)
+   ```bash
+   # Filter errors only
+   cat app.log | jq 'select(.level == "ERROR")'
+
+   # Extract messages
+   cat app.log | jq '.message'
+
+   # Filter by context field
+   cat app.log | jq 'select(.context.model == "sonnet")'
+   ```
+
+2. **Loki + Grafana** - Log aggregation and visualization (https://grafana.com/oss/loki/)
+   - Horizontally-scalable, multi-tenant log aggregation
+   - Native Grafana integration for dashboards
+   - LogQL query language
+
+3. **OpenSearch** - Search and analytics (https://opensearch.org/)
+   - Fork of Elasticsearch, fully open source (Apache 2.0)
+   - Powerful full-text search and analytics
+   - OpenSearch Dashboards for visualization
+
+4. **Vector** - Log collection/transformation (https://vector.dev/)
+   - High-performance log router
+   - Parse, transform, and route logs
+   - Integrates with many backends
+
+5. **Fluentd/Fluent Bit** - Log collection (https://www.fluentd.org/)
+   - Unified logging layer
+   - 500+ plugins for inputs/outputs
+   - CNCF graduated project
+
+6. **GoAccess** - Real-time log analyzer (https://goaccess.io/)
+   - Terminal-based real-time viewer
+   - Generates HTML reports
+
+7. **Logstash** - Log processing (https://www.elastic.co/logstash)
+   - Part of ELK stack (Apache 2.0 licensed)
+   - Powerful filtering and transformation
+
+Quick Local Analysis:
+--------------------
+```bash
+# Count logs by level
+cat app.log | jq -s 'group_by(.level) | map({level: .[0].level, count: length})'
+
+# Find slow operations (if duration tracked)
+cat app.log | jq 'select(.context.duration_ms > 1000)'
+
+# Get all unique error messages
+cat app.log | jq -s '[.[] | select(.level == "ERROR") | .message] | unique'
+
+# Pretty print with timestamps
+cat app.log | jq -r '"\(.timestamp) [\(.level)] \(.message)"'
+```
+
+Environment Variables:
+---------------------
+- CLAUDE_CODE_LOG_LEVEL: Set log level (DEBUG, INFO, WARNING, ERROR, CRITICAL)
+- CLAUDE_CODE_LOG_FORMAT: Set format (json, text) - default: json
+- CLAUDE_CODE_LOG_FILE: Optional file path for log output
+
+Example:
+    ```python
+    from claude_code_provider import configure_logging, get_logger
+
+    # Auto-configure from environment (recommended for production)
+    configure_logging()
+
+    # Or configure explicitly
+    configure_logging(level="DEBUG", format="text")  # For development
+
+    # Get a logger and use it
+    logger = get_logger(__name__)
+    logger.info("Operation started", operation="create_agent", model="sonnet")
+    ```
+"""
 
 import json
 import logging
+import os
 import sys
 from dataclasses import dataclass, field
 from datetime import datetime
 from enum import Enum
+from pathlib import Path
 from typing import Any, TextIO
+
+
+# Environment variable names
+ENV_LOG_LEVEL = "CLAUDE_CODE_LOG_LEVEL"
+ENV_LOG_FORMAT = "CLAUDE_CODE_LOG_FORMAT"
+ENV_LOG_FILE = "CLAUDE_CODE_LOG_FILE"
+
+# Default configuration
+DEFAULT_LOG_LEVEL = "INFO"
+DEFAULT_LOG_FORMAT = "json"  # JSON is default for production
 
 
 class LogLevel(str, Enum):
@@ -18,6 +113,12 @@ class LogLevel(str, Enum):
     WARNING = "WARNING"
     ERROR = "ERROR"
     CRITICAL = "CRITICAL"
+
+
+class LogFormat(str, Enum):
+    """Log output formats."""
+    JSON = "json"
+    TEXT = "text"
 
 
 @dataclass
@@ -53,7 +154,11 @@ class LogEntry:
 
 
 class StructuredFormatter(logging.Formatter):
-    """Formatter that outputs structured JSON logs."""
+    """Formatter that outputs structured JSON logs.
+
+    Output format:
+        {"level": "INFO", "message": "...", "timestamp": "...", "source": "...", "context": {...}}
+    """
 
     def __init__(self, include_context: bool = True) -> None:
         super().__init__()
@@ -66,6 +171,10 @@ class StructuredFormatter(logging.Formatter):
             "timestamp": datetime.fromtimestamp(record.created).isoformat(),
             "source": f"{record.name}:{record.funcName}:{record.lineno}",
         }
+
+        # Include exception info if present
+        if record.exc_info:
+            entry["exception"] = self.formatException(record.exc_info)
 
         # Include extra context
         if self.include_context:
@@ -88,11 +197,11 @@ class StructuredFormatter(logging.Formatter):
             if context:
                 entry["context"] = context
 
-        return json.dumps(entry)
+        return json.dumps(entry, ensure_ascii=False)
 
 
 class ColoredFormatter(logging.Formatter):
-    """Formatter with colored output for terminals."""
+    """Formatter with colored output for terminals (development use)."""
 
     COLORS = {
         "DEBUG": "\033[36m",     # Cyan
@@ -111,11 +220,213 @@ class ColoredFormatter(logging.Formatter):
         color = self.COLORS.get(record.levelname, "")
         reset = self.RESET
 
+        message = record.getMessage()
+
+        # Append context if present
+        context_parts = []
+        for key, value in record.__dict__.items():
+            if key not in (
+                "name", "msg", "args", "created", "filename",
+                "funcName", "levelname", "levelno", "lineno",
+                "module", "msecs", "pathname", "process",
+                "processName", "relativeCreated", "stack_info",
+                "exc_info", "exc_text", "thread", "threadName",
+                "message", "taskName",
+            ):
+                context_parts.append(f"{key}={value}")
+
+        if context_parts:
+            message = f"{message} [{', '.join(context_parts)}]"
+
         if self.include_time:
             time_str = datetime.fromtimestamp(record.created).strftime("%H:%M:%S")
-            return f"{color}[{time_str}] {record.levelname:8}{reset} {record.getMessage()}"
+            result = f"{color}[{time_str}] {record.levelname:8}{reset} {message}"
         else:
-            return f"{color}{record.levelname:8}{reset} {record.getMessage()}"
+            result = f"{color}{record.levelname:8}{reset} {message}"
+
+        # Add exception info if present
+        if record.exc_info:
+            result += f"\n{self.formatException(record.exc_info)}"
+
+        return result
+
+
+def configure_logging(
+    level: str | None = None,
+    format: str | None = None,
+    log_file: str | Path | None = None,
+    stream: TextIO | None = None,
+) -> logging.Logger:
+    """Configure logging for Claude Code Provider.
+
+    This function configures the root logger for the claude_code_provider package.
+    By default, it uses JSON format for production environments.
+
+    Configuration priority:
+    1. Function arguments (if provided)
+    2. Environment variables
+    3. Defaults (INFO level, JSON format)
+
+    Args:
+        level: Log level (DEBUG, INFO, WARNING, ERROR, CRITICAL).
+               Env: CLAUDE_CODE_LOG_LEVEL
+        format: Output format ('json' or 'text').
+                Env: CLAUDE_CODE_LOG_FORMAT
+        log_file: Optional file path to write logs to.
+                  Env: CLAUDE_CODE_LOG_FILE
+        stream: Output stream for console logging (default: stderr).
+
+    Returns:
+        Configured logger instance.
+
+    Example:
+        ```python
+        # Production (JSON to stderr)
+        configure_logging()
+
+        # Development (colored text)
+        configure_logging(level="DEBUG", format="text")
+
+        # Production with file output
+        configure_logging(log_file="/var/log/claude-code.log")
+        ```
+    """
+    # Resolve configuration with priority: args > env > defaults
+    resolved_level = (
+        level or
+        os.environ.get(ENV_LOG_LEVEL) or
+        DEFAULT_LOG_LEVEL
+    ).upper()
+
+    resolved_format = (
+        format or
+        os.environ.get(ENV_LOG_FORMAT) or
+        DEFAULT_LOG_FORMAT
+    ).lower()
+
+    resolved_file = (
+        log_file or
+        os.environ.get(ENV_LOG_FILE)
+    )
+
+    # Get or create logger
+    logger = logging.getLogger("claude_code_provider")
+    logger.setLevel(getattr(logging, resolved_level))
+
+    # Remove existing handlers
+    logger.handlers.clear()
+
+    # Create formatter based on format type
+    if resolved_format == "json":
+        formatter = StructuredFormatter()
+    else:
+        formatter = ColoredFormatter(include_time=True)
+
+    # Add console handler
+    console_handler = logging.StreamHandler(stream or sys.stderr)
+    console_handler.setFormatter(formatter)
+    logger.addHandler(console_handler)
+
+    # Add file handler if specified
+    if resolved_file:
+        file_path = Path(resolved_file)
+        file_path.parent.mkdir(parents=True, exist_ok=True)
+        file_handler = logging.FileHandler(file_path)
+        # Always use JSON for file output
+        file_handler.setFormatter(StructuredFormatter())
+        logger.addHandler(file_handler)
+
+    # Prevent propagation to root logger
+    logger.propagate = False
+
+    return logger
+
+
+class StructuredLogger:
+    """Logger wrapper that supports structured context as keyword arguments.
+
+    This wrapper allows passing context directly as keyword arguments instead
+    of using the `extra` parameter.
+
+    Example:
+        ```python
+        logger = get_logger(__name__)
+        logger.info("Request completed", model="sonnet", duration_ms=150)
+        ```
+    """
+
+    def __init__(self, logger: logging.Logger) -> None:
+        self._logger = logger
+
+    @property
+    def name(self) -> str:
+        return self._logger.name
+
+    def _log(self, level: int, message: str, **context: Any) -> None:
+        """Internal logging method with context support."""
+        if context:
+            self._logger.log(level, message, extra=context)
+        else:
+            self._logger.log(level, message)
+
+    def debug(self, message: str, **context: Any) -> None:
+        """Log debug message with optional context."""
+        self._log(logging.DEBUG, message, **context)
+
+    def info(self, message: str, **context: Any) -> None:
+        """Log info message with optional context."""
+        self._log(logging.INFO, message, **context)
+
+    def warning(self, message: str, **context: Any) -> None:
+        """Log warning message with optional context."""
+        self._log(logging.WARNING, message, **context)
+
+    def error(self, message: str, **context: Any) -> None:
+        """Log error message with optional context."""
+        self._log(logging.ERROR, message, **context)
+
+    def critical(self, message: str, **context: Any) -> None:
+        """Log critical message with optional context."""
+        self._log(logging.CRITICAL, message, **context)
+
+    def exception(self, message: str, **context: Any) -> None:
+        """Log exception with traceback and optional context."""
+        if context:
+            self._logger.exception(message, extra=context)
+        else:
+            self._logger.exception(message)
+
+    def setLevel(self, level: int | str) -> None:
+        """Set logging level."""
+        self._logger.setLevel(level)
+
+
+def get_logger(name: str | None = None) -> StructuredLogger:
+    """Get a structured logger instance for the given name.
+
+    Returns a StructuredLogger wrapper that supports context as keyword arguments.
+
+    Args:
+        name: Logger name. If None, returns the root claude_code_provider logger.
+              If provided, returns a child logger.
+
+    Returns:
+        StructuredLogger instance.
+
+    Example:
+        ```python
+        logger = get_logger(__name__)
+        logger.info("Operation completed", duration_ms=150, model="sonnet")
+        ```
+    """
+    if name is None:
+        base_logger = logging.getLogger("claude_code_provider")
+    elif name.startswith("claude_code_provider"):
+        base_logger = logging.getLogger(name)
+    else:
+        base_logger = logging.getLogger(f"claude_code_provider.{name}")
+
+    return StructuredLogger(base_logger)
 
 
 class DebugLogger:
@@ -123,8 +434,8 @@ class DebugLogger:
 
     Example:
         ```python
-        # Setup logging
-        logger = DebugLogger.setup(level="DEBUG", json_output=False)
+        # Setup logging (JSON is default)
+        logger = DebugLogger.setup(level="DEBUG", json_output=True)
 
         # Log with context
         logger.info("Request started", model="sonnet", tokens=500)
@@ -166,7 +477,7 @@ class DebugLogger:
     def setup(
         cls,
         level: str = "INFO",
-        json_output: bool = False,
+        json_output: bool = True,  # JSON is now default
         stream: TextIO | None = None,
         include_time: bool = True,
     ) -> "DebugLogger":
@@ -174,30 +485,15 @@ class DebugLogger:
 
         Args:
             level: Log level (DEBUG, INFO, WARNING, ERROR).
-            json_output: Whether to output structured JSON.
+            json_output: Whether to output structured JSON (default: True).
             stream: Output stream (default: stderr).
             include_time: Whether to include timestamps.
 
         Returns:
             Configured DebugLogger instance.
         """
-        logger = logging.getLogger("claude_code_provider")
-        logger.setLevel(getattr(logging, level.upper()))
-
-        # Remove existing handlers
-        logger.handlers.clear()
-
-        # Create handler
-        handler = logging.StreamHandler(stream or sys.stderr)
-
-        # Set formatter
-        if json_output:
-            handler.setFormatter(StructuredFormatter())
-        else:
-            handler.setFormatter(ColoredFormatter(include_time=include_time))
-
-        logger.addHandler(handler)
-
+        format_type = "json" if json_output else "text"
+        configure_logging(level=level, format=format_type, stream=stream)
         return cls(level=level)
 
     def start_capture(self) -> None:
@@ -336,13 +632,13 @@ class DebugLogger:
 
 def setup_logging(
     level: str = "INFO",
-    json_output: bool = False,
+    json_output: bool = True,  # JSON is now default
 ) -> DebugLogger:
     """Convenience function to setup logging.
 
     Args:
         level: Log level.
-        json_output: Whether to use JSON output.
+        json_output: Whether to use JSON output (default: True).
 
     Returns:
         Configured DebugLogger.

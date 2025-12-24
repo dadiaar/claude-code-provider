@@ -17,7 +17,8 @@ Example:
 """
 
 try:
-    from ._settings import ClaudeCodeSettings
+    from ._settings import ClaudeCodeSettings, ConfigurationError, VALID_MODELS
+    from ._validation import ValidationError
     from ._chat_client import ClaudeCodeClient
     from ._agent import ClaudeAgent, CompactResult, UsageStats, ContextInfo
     from ._exceptions import (
@@ -43,7 +44,16 @@ try:
         SimpleRouter,
         ModelTier,
     )
-    from ._logging import DebugLogger, setup_logging, LogLevel, LogEntry
+    from ._logging import (
+        DebugLogger,
+        StructuredLogger,
+        setup_logging,
+        configure_logging,
+        get_logger,
+        LogLevel,
+        LogFormat,
+        LogEntry,
+    )
     from ._sessions import SessionManager, SessionInfo, SessionExport
     from ._batch import BatchProcessor, BatchResult, BatchItem, BatchStatus
     from ._orchestration import (
@@ -82,7 +92,8 @@ try:
         MAF_MAGENTIC_AVAILABLE,
     )
 except ImportError:
-    from _settings import ClaudeCodeSettings
+    from _settings import ClaudeCodeSettings, ConfigurationError, VALID_MODELS
+    from _validation import ValidationError
     from _chat_client import ClaudeCodeClient
     from _agent import ClaudeAgent, CompactResult, UsageStats, ContextInfo
     from _exceptions import (
@@ -108,7 +119,16 @@ except ImportError:
         SimpleRouter,
         ModelTier,
     )
-    from _logging import DebugLogger, setup_logging, LogLevel, LogEntry
+    from _logging import (
+        DebugLogger,
+        StructuredLogger,
+        setup_logging,
+        configure_logging,
+        get_logger,
+        LogLevel,
+        LogFormat,
+        LogEntry,
+    )
     from _sessions import SessionManager, SessionInfo, SessionExport
     from _batch import BatchProcessor, BatchResult, BatchItem, BatchStatus
     from _orchestration import (
@@ -151,6 +171,9 @@ __all__ = [
     # Core
     "ClaudeCodeClient",
     "ClaudeCodeSettings",
+    "ConfigurationError",
+    "ValidationError",
+    "VALID_MODELS",
     "ClaudeAgent",
     "CompactResult",
     "UsageStats",
@@ -187,8 +210,12 @@ __all__ = [
     "ModelTier",
     # Logging
     "DebugLogger",
+    "StructuredLogger",
     "setup_logging",
+    "configure_logging",
+    "get_logger",
     "LogLevel",
+    "LogFormat",
     "LogEntry",
     # Sessions
     "SessionManager",

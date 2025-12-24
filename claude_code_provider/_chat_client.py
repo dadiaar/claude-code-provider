@@ -27,6 +27,15 @@ try:
     from ._settings import ClaudeCodeSettings
     from ._retry import RetryConfig
     from ._agent import ClaudeAgent, DEFAULT_AUTOCOMPACT_THRESHOLD
+    from ._validation import (
+        ValidationError,
+        validate_string,
+        validate_positive_int,
+        validate_positive_float,
+        validate_agents_list,
+        validate_agent,
+        validate_callable,
+    )
     from ._orchestration import (
         GroupChatOrchestrator,
         GroupChatConfig,
@@ -49,6 +58,15 @@ except ImportError:
     from _settings import ClaudeCodeSettings
     from _retry import RetryConfig
     from _agent import ClaudeAgent, DEFAULT_AUTOCOMPACT_THRESHOLD
+    from _validation import (
+        ValidationError,
+        validate_string,
+        validate_positive_int,
+        validate_positive_float,
+        validate_agents_list,
+        validate_agent,
+        validate_callable,
+    )
     from _orchestration import (
         GroupChatOrchestrator,
         GroupChatConfig,
@@ -149,7 +167,16 @@ class ClaudeCodeClient(BaseChatClient):
             enable_circuit_breaker: Enable circuit breaker pattern for failure protection.
             settings: Pre-configured settings object (overrides other args).
             **kwargs: Additional arguments passed to BaseChatClient.
+
+        Raises:
+            ValidationError: If any parameter is invalid.
         """
+        # Validate parameters
+        validate_positive_float(timeout, "timeout", min_value=1.0, max_value=3600.0)
+        validate_positive_int(max_turns, "max_turns", allow_none=True, min_value=1)
+        validate_string(model, "model", allow_none=True)
+        validate_string(cli_path, "cli_path")
+
         super().__init__(**kwargs)
 
         # Use provided settings or create from arguments
@@ -182,6 +209,39 @@ class ClaudeCodeClient(BaseChatClient):
 
         # Track session IDs for conversation continuity
         self._session_id: str | None = None
+
+        # Track if we're in a context manager
+        self._context_entered = False
+
+    async def __aenter__(self) -> "ClaudeCodeClient":
+        """Enter async context manager.
+
+        Returns:
+            The client instance.
+
+        Example:
+            ```python
+            async with ClaudeCodeClient(model="sonnet") as client:
+                agent = client.create_agent(name="assistant", instructions="...")
+                response = await agent.run("Hello!")
+            # Cleanup happens automatically here
+            ```
+        """
+        self._context_entered = True
+        return self
+
+    async def __aexit__(self, exc_type: Any, exc_val: Any, exc_tb: Any) -> None:
+        """Exit async context manager and cleanup resources.
+
+        Args:
+            exc_type: Exception type if an error occurred.
+            exc_val: Exception value if an error occurred.
+            exc_tb: Exception traceback if an error occurred.
+        """
+        self._context_entered = False
+        self._session_id = None
+        # Additional cleanup can be added here as needed
+        # e.g., closing any open connections, flushing logs, etc.
 
     async def _inner_get_response(
         self,
@@ -396,9 +456,21 @@ class ClaudeCodeClient(BaseChatClient):
 
             result = await orchestrator.run("Build a REST API")
             ```
+
+        Raises:
+            ValidationError: If any parameter is invalid.
         """
         if not MAF_ORCHESTRATION_AVAILABLE:
             raise ImportError("MAF orchestration not available")
+
+        # Validate parameters
+        validate_agents_list(participants, "participants", min_length=1)
+        validate_positive_int(max_rounds, "max_rounds", min_value=1)
+        if manager is not None and not callable(manager) and not hasattr(manager, "run"):
+            raise ValidationError(
+                "manager",
+                "must be a callable or ClaudeAgent"
+            )
 
         config = GroupChatConfig(
             max_rounds=max_rounds,
@@ -456,9 +528,17 @@ class ClaudeCodeClient(BaseChatClient):
 
             result = await orchestrator.run("I was charged twice")
             ```
+
+        Raises:
+            ValidationError: If any parameter is invalid.
         """
         if not MAF_ORCHESTRATION_AVAILABLE:
             raise ImportError("MAF orchestration not available")
+
+        # Validate parameters
+        validate_agent(coordinator, "coordinator")
+        validate_agents_list(specialists, "specialists", min_length=1)
+        validate_positive_int(autonomous_turn_limit, "autonomous_turn_limit", min_value=1)
 
         config = HandoffConfig(
             autonomous=autonomous,
@@ -500,9 +580,15 @@ class ClaudeCodeClient(BaseChatClient):
             result = await orchestrator.run("Write about AI")
             # researcher → writer → editor
             ```
+
+        Raises:
+            ValidationError: If any parameter is invalid.
         """
         if not MAF_ORCHESTRATION_AVAILABLE:
             raise ImportError("MAF orchestration not available")
+
+        # Validate parameters
+        validate_agents_list(agents, "agents", min_length=1)
 
         return SequentialOrchestrator(
             agents=agents,
@@ -537,9 +623,16 @@ class ClaudeCodeClient(BaseChatClient):
 
             result = await orchestrator.run("Analyze this data")
             ```
+
+        Raises:
+            ValidationError: If any parameter is invalid.
         """
         if not MAF_ORCHESTRATION_AVAILABLE:
             raise ImportError("MAF orchestration not available")
+
+        # Validate parameters
+        validate_agents_list(agents, "agents", min_length=1)
+        validate_callable(aggregator, "aggregator", allow_none=True)
 
         return ConcurrentOrchestrator(
             agents=agents,
@@ -585,7 +678,17 @@ class ClaudeCodeClient(BaseChatClient):
             result = await orchestrator.run("Write a sorting function")
             print(f"Approved after {result.rounds} iterations")
             ```
+
+        Raises:
+            ValidationError: If any parameter is invalid.
         """
+        # Validate parameters
+        validate_agent(worker, "worker")
+        validate_agent(reviewer, "reviewer")
+        validate_positive_int(max_iterations, "max_iterations", min_value=1)
+        validate_callable(approval_check, "approval_check", allow_none=True)
+        validate_agent(synthesizer, "synthesizer", allow_none=True)
+
         return FeedbackLoopOrchestrator(
             worker=worker,
             reviewer=reviewer,
