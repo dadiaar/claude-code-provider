@@ -2521,6 +2521,7 @@ class TestSecurity:
             "cmd*",               # Wildcard
             "cmd?",               # Wildcard
             "~/.ssh/id_rsa",      # Home directory expansion
+            "cmd\0evil",          # Null byte injection
         ]
         for cmd in extended_dangerous:
             try:
