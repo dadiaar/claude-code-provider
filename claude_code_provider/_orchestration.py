@@ -488,6 +488,18 @@ class GracefulStopHandler:
     When triggered, sets a flag that orchestrators can check to stop
     gracefully and save their checkpoint.
 
+    Thread-Safety Note:
+        Each orchestrator should create its own GracefulStopHandler instance
+        to avoid conflicts when multiple orchestrators run concurrently.
+        The global get_stop_handler() is provided for simple single-orchestrator
+        use cases but should be avoided in multi-orchestrator scenarios.
+
+    Signal Handler Safety:
+        The signal handler only sets an atomic flag and does NOT perform I/O
+        (print, logging, file operations). This ensures async-signal-safety.
+        Any logging of the stop event should be done by the main code when
+        it detects should_stop is True.
+
     Example:
         ```python
         handler = GracefulStopHandler()
@@ -498,6 +510,8 @@ class GracefulStopHandler:
             pass
 
         if handler.should_stop:
+            # Log and save checkpoint in main code (not signal handler)
+            print("Graceful stop requested, saving checkpoint...")
             # Save checkpoint and exit
             pass
         ```
@@ -507,43 +521,78 @@ class GracefulStopHandler:
         self.should_stop = False
         self._original_sigint = None
         self._original_sigterm = None
+        self._registered = False
 
     def _signal_handler(self, signum, frame):
-        """Handle stop signal."""
-        print("\n[Orchestrator] Graceful stop requested. Saving checkpoint...")
+        """Handle stop signal.
+
+        IMPORTANT: This handler ONLY sets a flag. It does NOT perform any I/O
+        operations (print, logging, file writes) because those are not
+        async-signal-safe and can cause deadlocks or undefined behavior.
+        """
+        # Only set the flag - no I/O operations allowed in signal handlers
         self.should_stop = True
 
     def register(self):
-        """Register signal handlers."""
+        """Register signal handlers.
+
+        Note: If called multiple times without unregister(), subsequent calls
+        are no-ops. This prevents accidentally overwriting the original handlers.
+        """
+        if self._registered:
+            return  # Already registered, don't overwrite
+
         self._original_sigint = signal.signal(signal.SIGINT, self._signal_handler)
         try:
             self._original_sigterm = signal.signal(signal.SIGTERM, self._signal_handler)
         except (ValueError, OSError):
             # SIGTERM might not be available on all platforms
             pass
+        self._registered = True
 
     def unregister(self):
         """Restore original signal handlers."""
+        if not self._registered:
+            return  # Nothing to unregister
+
         if self._original_sigint is not None:
             signal.signal(signal.SIGINT, self._original_sigint)
+            self._original_sigint = None
         if self._original_sigterm is not None:
             try:
                 signal.signal(signal.SIGTERM, self._original_sigterm)
             except (ValueError, OSError):
                 pass
+            self._original_sigterm = None
+        self._registered = False
 
     def reset(self):
         """Reset the stop flag."""
         self.should_stop = False
 
+    @property
+    def is_registered(self) -> bool:
+        """Check if signal handlers are currently registered."""
+        return self._registered
 
-# Global stop handler
-_stop_handler = GracefulStopHandler()
+
+# Thread-local storage for stop handlers (one per thread)
+import threading
+_stop_handler_local = threading.local()
 
 
 def get_stop_handler() -> GracefulStopHandler:
-    """Get the global stop handler."""
-    return _stop_handler
+    """Get the thread-local stop handler.
+
+    Returns a thread-local GracefulStopHandler instance. Each thread gets
+    its own handler to avoid conflicts in multi-threaded applications.
+
+    For multi-orchestrator scenarios within the same thread, consider
+    creating explicit GracefulStopHandler instances instead.
+    """
+    if not hasattr(_stop_handler_local, 'handler'):
+        _stop_handler_local.handler = GracefulStopHandler()
+    return _stop_handler_local.handler
 
 
 # =============================================================================
@@ -1384,9 +1433,10 @@ class FeedbackLoopOrchestrator:
             for i in range(start_iteration, self.max_iterations):
                 iterations = i + 1
 
-                # Check for graceful stop
+                # Check for graceful stop (logging done here, not in signal handler)
                 if stop_handler.should_stop:
                     status = "stopped"
+                    print(f"\n[Orchestrator] Graceful stop requested. Saving checkpoint...")
                     print(f"[Orchestrator] Stopped at iteration {iterations}")
                     break
 
@@ -1430,9 +1480,11 @@ class FeedbackLoopOrchestrator:
                         worker_response.usage_details.output_token_count or 0,
                     )
 
-                # Check stop again before reviewer
+                # Check stop again before reviewer (logging done here, not in signal handler)
                 if stop_handler.should_stop:
                     status = "stopped"
+                    print(f"\n[Orchestrator] Graceful stop requested. Saving checkpoint...")
+                    print(f"[Orchestrator] Stopped after worker, before reviewer (iteration {iterations})")
                     break
 
                 # Reviewer evaluates work

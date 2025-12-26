@@ -1995,6 +1995,79 @@ class TestGracefulStop:
         handler.register()
         handler.unregister()
 
+    def test_stop_handler_is_registered_property(self):
+        """Test GracefulStopHandler.is_registered property (fix for #12)."""
+        from claude_code_provider import GracefulStopHandler
+
+        handler = GracefulStopHandler()
+        assert handler.is_registered is False
+
+        handler.register()
+        assert handler.is_registered is True
+
+        handler.unregister()
+        assert handler.is_registered is False
+
+    def test_stop_handler_register_idempotent(self):
+        """Test that multiple register() calls are no-ops (fix for #12)."""
+        from claude_code_provider import GracefulStopHandler
+        import signal
+
+        handler = GracefulStopHandler()
+
+        # Register once
+        handler.register()
+        original_sigint = handler._original_sigint
+
+        # Register again should be no-op
+        handler.register()
+        assert handler._original_sigint is original_sigint  # Not overwritten
+
+        handler.unregister()
+
+    def test_stop_handler_thread_local(self):
+        """Test that get_stop_handler returns thread-local handlers (fix for #12)."""
+        from claude_code_provider import get_stop_handler
+        import threading
+
+        main_handler = get_stop_handler()
+        thread_handler = [None]
+
+        def get_thread_handler():
+            thread_handler[0] = get_stop_handler()
+
+        thread = threading.Thread(target=get_thread_handler)
+        thread.start()
+        thread.join()
+
+        # Different threads get different handlers
+        assert thread_handler[0] is not main_handler
+
+    def test_signal_handler_only_sets_flag(self):
+        """Test that signal handler only sets flag, no I/O (fix for #8)."""
+        from claude_code_provider import GracefulStopHandler
+        import io
+        import sys
+
+        handler = GracefulStopHandler()
+
+        # Capture stdout to verify no output
+        old_stdout = sys.stdout
+        sys.stdout = captured = io.StringIO()
+
+        try:
+            # Simulate signal handler being called
+            handler._signal_handler(2, None)  # SIGINT = 2
+
+            # Verify flag was set
+            assert handler.should_stop is True
+
+            # Verify no output was produced
+            output = captured.getvalue()
+            assert output == "", f"Signal handler should not produce output, got: {output!r}"
+        finally:
+            sys.stdout = old_stdout
+
 
 class TestFeedbackLoopAdvanced:
     """Advanced tests for FeedbackLoopOrchestrator."""
