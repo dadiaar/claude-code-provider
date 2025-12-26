@@ -224,27 +224,81 @@ class SessionManager:
                 logger.warning(f"Failed to load sessions: {e}")
 
     def _save_sessions(self) -> None:
-        """Save sessions to storage with secure permissions."""
+        """Save sessions to storage with secure permissions.
+
+        Uses atomic file creation with secure permissions to prevent TOCTOU
+        race conditions (fixes #3). Raises exception on permission failure
+        instead of silently continuing (fixes #6).
+        """
+        import tempfile
+
         try:
             # Create directory with secure permissions (owner only)
-            self.storage_path.parent.mkdir(parents=True, exist_ok=True)
+            parent_dir = self.storage_path.parent
+            parent_dir.mkdir(parents=True, exist_ok=True)
+
+            # Set directory permissions - log warning but don't fail
+            # (directory may already have correct permissions)
             try:
-                os.chmod(self.storage_path.parent, stat.S_IRWXU)  # 0o700
-            except OSError:
-                pass  # May fail on some filesystems
+                os.chmod(parent_dir, stat.S_IRWXU)  # 0o700
+            except OSError as e:
+                logger.debug(f"Could not set directory permissions: {e}")
 
             data = {
                 "sessions": [s.to_dict() for s in self._sessions.values()],
                 "updated_at": datetime.now().isoformat(),
             }
-            self.storage_path.write_text(json.dumps(data, indent=2))
+            json_content = json.dumps(data, indent=2)
 
-            # Set secure file permissions (owner read/write only)
+            # Use atomic write with secure permissions from the start
+            # This prevents TOCTOU race where file is briefly world-readable
+            temp_fd = None
+            temp_path = None
             try:
-                os.chmod(self.storage_path, stat.S_IRUSR | stat.S_IWUSR)  # 0o600
-            except OSError:
-                pass  # May fail on some filesystems
+                # Create temp file with secure permissions (0o600) atomically
+                temp_fd, temp_path = tempfile.mkstemp(
+                    dir=str(parent_dir),
+                    prefix='.sessions_',
+                    suffix='.tmp'
+                )
+                # mkstemp creates with 0o600 by default, but ensure it
+                os.fchmod(temp_fd, stat.S_IRUSR | stat.S_IWUSR)  # 0o600
 
+                # Write content
+                os.write(temp_fd, json_content.encode('utf-8'))
+                os.fsync(temp_fd)  # Ensure data is on disk
+                os.close(temp_fd)
+                temp_fd = None
+
+                # Verify permissions before rename
+                file_stat = os.stat(temp_path)
+                actual_mode = file_stat.st_mode & 0o777
+                if actual_mode != 0o600:
+                    raise PermissionError(
+                        f"Session file has insecure permissions: {oct(actual_mode)} "
+                        f"(expected 0o600). Cannot save session data securely."
+                    )
+
+                # Atomic rename to target
+                os.replace(temp_path, str(self.storage_path))
+                temp_path = None  # Successfully moved, don't cleanup
+
+            finally:
+                # Cleanup on failure
+                if temp_fd is not None:
+                    try:
+                        os.close(temp_fd)
+                    except OSError:
+                        pass
+                if temp_path is not None:
+                    try:
+                        os.unlink(temp_path)
+                    except OSError:
+                        pass
+
+        except PermissionError:
+            # Re-raise permission errors - these are security critical
+            raise
         except Exception as e:
             logger.warning(f"Failed to save sessions: {e}")
 
