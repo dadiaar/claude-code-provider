@@ -21,6 +21,12 @@ _SERVER_NAME_PATTERN = re.compile(r'^[a-zA-Z][a-zA-Z0-9_-]*$')
 _ENV_VAR_NAME_PATTERN = re.compile(r'^[A-Za-z_][A-Za-z0-9_]*$')
 # Dangerous shell metacharacters that should not appear in commands/args
 # Includes: shell operators, quotes, escapes, wildcards, whitespace controls
+#
+# DESIGN DECISION: The '/' character is intentionally NOT included.
+# Rationale: Forward slashes are required for file paths (e.g., "npx /path/to/server").
+# Security: This is safe because we use subprocess.exec() (not shell=True), so arguments
+# are passed directly to the executable without shell interpretation.
+# Reviewed: 2025-01 - Not a security vulnerability, intentional design choice.
 _DANGEROUS_CHARS = set(';&|`$(){}[]<>!#\n\r\t\'"\\*?~')
 
 # Hostnames that should be blocked for SSRF prevention

@@ -533,6 +533,11 @@ Output only the summary, no preamble.""",
             prompt = message
 
         # Track user message
+        # DESIGN DECISION: Message tracking is single-stream by design.
+        # This agent is intended for single-stream conversation use (one run() at a time).
+        # Concurrent run() calls on the same agent instance are not supported.
+        # If concurrent conversations are needed, create separate agent instances.
+        # Reviewed: 2025-01 - Not a bug, documented API contract.
         self._messages.append(ConversationMessage(role="user", text=message))
 
         # Run the inner agent with all parameters

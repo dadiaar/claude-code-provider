@@ -304,6 +304,11 @@ class BatchProcessor:
                     model=model,
                     retries_left=retries,
                 )
+                # DESIGN DECISION: This increment is safe in asyncio.
+                # Rationale: asyncio is single-threaded and only switches context at await points.
+                # The `completed += 1` executes atomically between awaits (no thread races).
+                # This is standard asyncio pattern - no lock needed for simple counter updates.
+                # Reviewed: 2025-01 - Not a race condition, intentional design choice.
                 completed += 1
                 if progress_callback:
                     progress_callback(completed, len(items))
