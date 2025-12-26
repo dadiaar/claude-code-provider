@@ -12,6 +12,7 @@ Or run directly:
 
 import asyncio
 import json
+import pytest
 import sys
 from pathlib import Path
 
@@ -2058,6 +2059,44 @@ class TestCheckpointing:
 
                 # Cleanup
                 _checkpoint_managers.clear()
+
+    @pytest.mark.asyncio
+    async def test_checkpoint_manager_async_methods(self):
+        """Test CheckpointManager async methods (fix for #11)."""
+        from claude_code_provider import CheckpointManager, Checkpoint
+        import tempfile
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            manager = CheckpointManager(tmpdir)
+
+            checkpoint = Checkpoint(
+                checkpoint_id="async_test",
+                orchestration_type="feedback_loop",
+                task="Test task",
+                conversation=[],
+                current_iteration=1,
+                current_work="Work",
+                feedback="Feedback",
+                participants_used=["w", "r"],
+                metadata={},
+                created_at="2025-01-01T00:00:00",
+                updated_at="2025-01-01T00:00:00",
+                status="in_progress",
+            )
+
+            # Test async_save
+            path = await manager.async_save(checkpoint)
+            assert path.exists()
+
+            # Test async_load
+            loaded = await manager.async_load("async_test")
+            assert loaded is not None
+            assert loaded.checkpoint_id == "async_test"
+
+            # Test async_clear
+            result = await manager.async_clear("async_test")
+            assert result is True
+            assert not path.exists()
 
 
 class TestGracefulStop:

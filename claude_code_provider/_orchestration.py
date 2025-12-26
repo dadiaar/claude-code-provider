@@ -358,12 +358,19 @@ class CheckpointManager:
     def save(self, checkpoint: Checkpoint) -> Path:
         """Save a checkpoint to disk with secure permissions.
 
+        Uses atomic write pattern to prevent data corruption on crashes:
+        1. Write to temp file with secure permissions
+        2. Verify permissions
+        3. Atomic rename to target
+
         Args:
             checkpoint: Checkpoint to save.
 
         Returns:
             Path to saved checkpoint file.
         """
+        import tempfile
+
         checkpoint.updated_at = datetime.now().isoformat()
 
         # Serialize checkpoint to JSON-compatible dict
@@ -390,14 +397,43 @@ class CheckpointManager:
         except OSError:
             pass  # May fail on some filesystems
 
-        with open(path, "w") as f:
-            json.dump(data, f, indent=2)
+        # Use atomic write pattern to prevent corruption on crash
+        json_content = json.dumps(data, indent=2)
+        temp_fd = None
+        temp_path = None
 
-        # Set secure file permissions (owner read/write only)
         try:
-            os.chmod(path, stat.S_IRUSR | stat.S_IWUSR)  # 0o600
-        except OSError:
-            pass  # May fail on some filesystems
+            # Create temp file with secure permissions atomically
+            temp_fd, temp_path = tempfile.mkstemp(
+                dir=str(self.checkpoint_dir),
+                prefix='.checkpoint_',
+                suffix='.tmp'
+            )
+            # mkstemp creates with 0o600 by default, but ensure it
+            os.fchmod(temp_fd, stat.S_IRUSR | stat.S_IWUSR)  # 0o600
+
+            # Write content
+            os.write(temp_fd, json_content.encode('utf-8'))
+            os.fsync(temp_fd)  # Ensure data is on disk
+            os.close(temp_fd)
+            temp_fd = None
+
+            # Atomic rename to target
+            os.replace(temp_path, str(path))
+            temp_path = None  # Successfully moved
+
+        finally:
+            # Cleanup on failure
+            if temp_fd is not None:
+                try:
+                    os.close(temp_fd)
+                except OSError:
+                    pass
+            if temp_path is not None:
+                try:
+                    os.unlink(temp_path)
+                except OSError:
+                    pass
 
         return path
 
@@ -481,6 +517,43 @@ class CheckpointManager:
             path.unlink()
             count += 1
         return count
+
+    async def async_save(self, checkpoint: Checkpoint) -> Path:
+        """Async version of save() - runs blocking I/O in thread pool.
+
+        Use this in async contexts to avoid blocking the event loop.
+
+        Args:
+            checkpoint: Checkpoint to save.
+
+        Returns:
+            Path to saved checkpoint file.
+        """
+        return await asyncio.to_thread(self.save, checkpoint)
+
+    async def async_load(self, checkpoint_id: str) -> Checkpoint | None:
+        """Async version of load() - runs blocking I/O in thread pool.
+
+        Use this in async contexts to avoid blocking the event loop.
+
+        Args:
+            checkpoint_id: ID of checkpoint to load.
+
+        Returns:
+            Checkpoint if found, None otherwise.
+        """
+        return await asyncio.to_thread(self.load, checkpoint_id)
+
+    async def async_clear(self, checkpoint_id: str) -> bool:
+        """Async version of clear() - runs blocking I/O in thread pool.
+
+        Args:
+            checkpoint_id: ID of checkpoint to delete.
+
+        Returns:
+            True if deleted, False if not found.
+        """
+        return await asyncio.to_thread(self.clear, checkpoint_id)
 
     def list_checkpoints(self) -> list[Checkpoint]:
         """List all available checkpoints.
@@ -1397,7 +1470,8 @@ class FeedbackLoopOrchestrator:
             )
 
             # Check for existing checkpoint (auto-resume)
-            existing = self.checkpoint_manager.load(checkpoint_id)
+            # Use async_load to avoid blocking the event loop
+            existing = await self.checkpoint_manager.async_load(checkpoint_id)
             if existing and existing.status == "in_progress":
                 print(f"[Orchestrator] Resuming from checkpoint (iteration {existing.current_iteration})...")
                 return await self._run_internal(
@@ -1425,7 +1499,7 @@ class FeedbackLoopOrchestrator:
             for item in data
         ]
 
-    def _save_checkpoint(
+    async def _save_checkpoint(
         self,
         checkpoint_id: str,
         task: str,
@@ -1435,7 +1509,7 @@ class FeedbackLoopOrchestrator:
         feedback: str,
         status: str,
     ) -> None:
-        """Save current state to checkpoint."""
+        """Save current state to checkpoint (async to avoid blocking event loop)."""
         if not self.checkpoint_manager:
             return
 
@@ -1457,7 +1531,7 @@ class FeedbackLoopOrchestrator:
             updated_at=datetime.now().isoformat(),
             status=status,
         )
-        self.checkpoint_manager.save(checkpoint)
+        await self.checkpoint_manager.async_save(checkpoint)
 
     async def _run_internal(
         self,
@@ -1578,9 +1652,9 @@ class FeedbackLoopOrchestrator:
                         review_response.usage_details.output_token_count or 0,
                     )
 
-                # Save checkpoint after each iteration
+                # Save checkpoint after each iteration (async to avoid blocking)
                 if checkpoint_id:
-                    self._save_checkpoint(
+                    await self._save_checkpoint(
                         checkpoint_id, task, conversation, iterations,
                         current_work, feedback, "in_progress"
                     )
@@ -1629,15 +1703,15 @@ class FeedbackLoopOrchestrator:
         if self.synthesizer:
             participants.add(self.synthesizer.name)
 
-        # Final checkpoint save with terminal status
+        # Final checkpoint save with terminal status (async to avoid blocking)
         if checkpoint_id and status in ("completed", "max_iterations"):
-            self._save_checkpoint(
+            await self._save_checkpoint(
                 checkpoint_id, task, conversation, iterations,
                 current_work, feedback, status
             )
             # Clear checkpoint on successful completion
             if status == "completed" and self.checkpoint_manager:
-                self.checkpoint_manager.clear(checkpoint_id)
+                await self.checkpoint_manager.async_clear(checkpoint_id)
 
         return OrchestrationResult(
             final_output=final_output,
