@@ -67,6 +67,65 @@ class TestSettings:
         assert "--tools" in args
         assert "Bash,Read" in args
 
+    def test_env_value_validation(self):
+        """Test environment variable value validation (fix for #1)."""
+        from claude_code_provider._settings import ClaudeCodeSettings, ConfigurationError
+        import os
+
+        # Save original env
+        original_model = os.environ.get("CLAUDE_CODE_MODEL")
+
+        try:
+            # Valid model value
+            os.environ["CLAUDE_CODE_MODEL"] = "sonnet"
+            settings = ClaudeCodeSettings(validate_on_init=False)
+            assert settings.model == "sonnet"
+
+            # Clean up
+            del os.environ["CLAUDE_CODE_MODEL"]
+
+            # Test dangerous characters are rejected
+            os.environ["CLAUDE_CODE_MODEL"] = "sonnet; rm -rf /"
+            try:
+                ClaudeCodeSettings(validate_on_init=False)
+                assert False, "Should reject dangerous characters"
+            except ConfigurationError as e:
+                assert "dangerous" in str(e).lower()
+
+        finally:
+            # Restore original
+            if original_model:
+                os.environ["CLAUDE_CODE_MODEL"] = original_model
+            elif "CLAUDE_CODE_MODEL" in os.environ:
+                del os.environ["CLAUDE_CODE_MODEL"]
+
+    def test_configuration_error_hierarchy(self):
+        """Test ConfigurationError inherits from ClaudeCodeException (fix for #13)."""
+        from claude_code_provider._settings import ConfigurationError
+        from claude_code_provider._exceptions import ClaudeCodeException
+
+        error = ConfigurationError("test_field", "test message")
+        assert isinstance(error, ClaudeCodeException)
+        assert error.field == "test_field"
+        assert error.message == "test message"
+
+    def test_windows_forbidden_dirs(self):
+        """Test Windows forbidden directories are defined (fix for #32)."""
+        from claude_code_provider._settings import (
+            _FORBIDDEN_WORKING_DIRS_WINDOWS,
+            _FORBIDDEN_WORKING_DIRS_UNIX,
+        )
+
+        # Windows paths should be defined
+        assert "C:\\" in _FORBIDDEN_WORKING_DIRS_WINDOWS
+        assert "C:\\Windows" in _FORBIDDEN_WORKING_DIRS_WINDOWS
+        assert "C:\\Windows\\System32" in _FORBIDDEN_WORKING_DIRS_WINDOWS
+
+        # Unix paths should be defined
+        assert "/" in _FORBIDDEN_WORKING_DIRS_UNIX
+        assert "/etc" in _FORBIDDEN_WORKING_DIRS_UNIX
+        assert "/bin" in _FORBIDDEN_WORKING_DIRS_UNIX
+
 
 class TestExceptions:
     """Test exception hierarchy."""

@@ -3,10 +3,14 @@
 """Settings for Claude Code CLI provider with validation."""
 
 import os
+import platform
+import re
 import shutil
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Literal
+
+from ._exceptions import ClaudeCodeException
 
 
 # Valid model names and aliases
@@ -29,16 +33,38 @@ VALID_PERMISSION_MODES = frozenset({
 })
 
 # Directories that should not be used as working directories for security
-_FORBIDDEN_WORKING_DIRS = frozenset({
+# Unix/Linux/macOS forbidden directories
+_FORBIDDEN_WORKING_DIRS_UNIX = frozenset({
     "/", "/etc", "/bin", "/sbin", "/usr/bin", "/usr/sbin",
     "/boot", "/dev", "/proc", "/sys", "/var/run",
     "/lib", "/lib64", "/usr/lib", "/usr/lib64",
     "/root", "/var/log", "/var/spool",
 })
 
+# Windows forbidden directories (fix for #32)
+_FORBIDDEN_WORKING_DIRS_WINDOWS = frozenset({
+    "C:\\", "C:\\Windows", "C:\\Windows\\System32",
+    "C:\\Windows\\SysWOW64", "C:\\Program Files",
+    "C:\\Program Files (x86)", "C:\\Users",
+})
 
-class ConfigurationError(Exception):
+# Combined forbidden directories based on platform
+_FORBIDDEN_WORKING_DIRS = (
+    _FORBIDDEN_WORKING_DIRS_WINDOWS
+    if platform.system() == "Windows"
+    else _FORBIDDEN_WORKING_DIRS_UNIX
+)
+
+# Pattern for safe environment variable values
+# Allows alphanumeric, path separators, common safe chars
+_SAFE_ENV_VALUE_PATTERN = re.compile(r'^[a-zA-Z0-9_./:@=+,\-\\\s]*$')
+
+
+class ConfigurationError(ClaudeCodeException):
     """Raised when configuration validation fails.
+
+    Inherits from ClaudeCodeException to be part of the unified exception
+    hierarchy (fix for #13).
 
     Attributes:
         field: The field that failed validation.
@@ -105,28 +131,68 @@ class ClaudeCodeSettings:
     # Environment variable overrides
     env_prefix: str = field(default="CLAUDE_CODE_", repr=False)
 
-    def __post_init__(self) -> None:
-        """Load settings from environment variables and optionally validate."""
-        # CLI path from environment
-        if self.cli_path == "claude":
-            env_path = os.environ.get(f"{self.env_prefix}CLI_PATH")
-            if env_path:
-                self.cli_path = env_path
+    def _validate_env_value(self, field: str, env_var: str, value: str) -> str:
+        """Validate an environment variable value for injection attacks.
 
-        # Model from environment
+        Fix for #1: Environment variable values are validated before use
+        to prevent shell injection via malicious env vars.
+
+        Args:
+            field: The setting field name (for error messages).
+            env_var: The environment variable name.
+            value: The value to validate.
+
+        Returns:
+            The validated value.
+
+        Raises:
+            ConfigurationError: If value contains potentially dangerous characters.
+        """
+        if not _SAFE_ENV_VALUE_PATTERN.match(value):
+            raise ConfigurationError(
+                field,
+                f"Environment variable {env_var} contains potentially dangerous "
+                f"characters. Value: '{value}'. Only alphanumeric characters, "
+                "path separators, and common safe characters are allowed."
+            )
+        return value
+
+    def __post_init__(self) -> None:
+        """Load settings from environment variables and optionally validate.
+
+        Note on TOCTOU (fix for #17): Working directory validation happens at
+        initialization time. The directory could theoretically be modified
+        between validation and CLI execution. Full prevention would require
+        chroot or namespaces which is beyond scope. Users should ensure their
+        working directories are stable.
+        """
+        # CLI path from environment (with injection validation)
+        if self.cli_path == "claude":
+            env_var = f"{self.env_prefix}CLI_PATH"
+            env_path = os.environ.get(env_var)
+            if env_path:
+                self.cli_path = self._validate_env_value("cli_path", env_var, env_path)
+
+        # Model from environment (with injection validation)
         if self.model is None:
-            self.model = os.environ.get(f"{self.env_prefix}MODEL")
+            env_var = f"{self.env_prefix}MODEL"
+            env_model = os.environ.get(env_var)
+            if env_model:
+                self.model = self._validate_env_value("model", env_var, env_model)
 
         # Max turns from environment
         if self.default_max_turns is None:
-            env_turns = os.environ.get(f"{self.env_prefix}MAX_TURNS")
+            env_var = f"{self.env_prefix}MAX_TURNS"
+            env_turns = os.environ.get(env_var)
             if env_turns:
+                # Validate format before parsing
+                self._validate_env_value("default_max_turns", env_var, env_turns)
                 try:
                     self.default_max_turns = int(env_turns)
                 except ValueError:
                     raise ConfigurationError(
                         "default_max_turns",
-                        f"Environment variable {self.env_prefix}MAX_TURNS must be an integer, got '{env_turns}'"
+                        f"Environment variable {env_var} must be an integer, got '{env_turns}'"
                     )
 
         # Validate if requested
