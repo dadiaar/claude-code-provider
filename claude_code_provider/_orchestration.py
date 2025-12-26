@@ -48,6 +48,7 @@ from collections.abc import Sequence
 import asyncio
 import json
 import os
+import secrets
 import signal
 import stat
 import hashlib
@@ -244,7 +245,14 @@ class CheckpointManager:
     """Manages saving and loading orchestration checkpoints.
 
     Checkpoints are saved as JSON files in the checkpoint directory.
-    Each orchestration run gets a unique checkpoint ID based on the task hash.
+    Each orchestration run gets a unique checkpoint ID based on the task hash
+    combined with cryptographic randomness to prevent collisions.
+
+    Security features:
+    - Cryptographic random IDs prevent collision attacks
+    - Symlink detection prevents path traversal via symlinks
+    - File size limits prevent OOM via malicious checkpoint files
+    - Secure file permissions (0o600) protect checkpoint data
 
     Example:
         ```python
@@ -264,13 +272,16 @@ class CheckpointManager:
         ```
     """
 
+    # Maximum checkpoint file size (10 MB) to prevent OOM
+    MAX_CHECKPOINT_SIZE = 10 * 1024 * 1024
+
     def __init__(self, checkpoint_dir: str | Path = "./checkpoints"):
         """Initialize checkpoint manager.
 
         Args:
             checkpoint_dir: Directory to store checkpoints.
         """
-        self.checkpoint_dir = Path(checkpoint_dir)
+        self.checkpoint_dir = Path(checkpoint_dir).resolve()
         self.checkpoint_dir.mkdir(parents=True, exist_ok=True)
 
     def _get_checkpoint_path(self, checkpoint_id: str) -> Path:
@@ -283,7 +294,8 @@ class CheckpointManager:
             Path to the checkpoint file.
 
         Raises:
-            ValueError: If checkpoint_id contains invalid characters or path traversal.
+            ValueError: If checkpoint_id contains invalid characters, path traversal,
+                       or the path is a symlink.
         """
         # Validate checkpoint ID format (alphanumeric, underscores, hyphens only)
         if not checkpoint_id or not all(c.isalnum() or c in '_-' for c in checkpoint_id):
@@ -295,26 +307,53 @@ class CheckpointManager:
         path = self.checkpoint_dir / f"{checkpoint_id}.json"
 
         # Ensure path is within checkpoint directory (prevent path traversal)
+        # Note: self.checkpoint_dir is already resolved in __init__
         try:
-            path.resolve().relative_to(self.checkpoint_dir.resolve())
+            path.resolve().relative_to(self.checkpoint_dir)
         except ValueError:
             raise ValueError(f"Checkpoint path traversal detected: {checkpoint_id}")
 
+        # Prevent symlink attacks: if the file exists, ensure it's not a symlink
+        # Use lstat() to check the link itself, not the target
+        if path.exists() and path.is_symlink():
+            raise ValueError(
+                f"Checkpoint file is a symlink (potential symlink attack): {checkpoint_id}"
+            )
+
         return path
 
-    def generate_checkpoint_id(self, task: str, orchestration_type: str) -> str:
-        """Generate a unique checkpoint ID based on task and type.
+    def generate_checkpoint_id(
+        self,
+        task: str,
+        orchestration_type: str,
+        unique: bool = True,
+    ) -> str:
+        """Generate a checkpoint ID based on task and type.
 
         Args:
             task: The task description.
             orchestration_type: Type of orchestration.
+            unique: If True (default), appends cryptographic random suffix
+                   to ensure uniqueness. If False, returns deterministic ID
+                   based on task hash (useful for resumption by task).
 
         Returns:
-            Unique checkpoint ID.
+            Checkpoint ID (unique by default, deterministic if unique=False).
+
+        Security:
+            Uses secrets.token_hex() for cryptographic randomness when unique=True,
+            preventing checkpoint ID collision attacks.
         """
         content = f"{orchestration_type}:{task}"
         hash_part = hashlib.sha256(content.encode()).hexdigest()[:12]
-        return f"{orchestration_type}_{hash_part}"
+
+        if unique:
+            # Add cryptographic random suffix to prevent collisions
+            random_suffix = secrets.token_hex(4)  # 8 hex chars = 32 bits
+            return f"{orchestration_type}_{hash_part}_{random_suffix}"
+        else:
+            # Deterministic ID for task-based resumption
+            return f"{orchestration_type}_{hash_part}"
 
     def save(self, checkpoint: Checkpoint) -> Path:
         """Save a checkpoint to disk with secure permissions.
@@ -370,10 +409,22 @@ class CheckpointManager:
 
         Returns:
             Checkpoint if found, None otherwise.
+
+        Raises:
+            ValueError: If checkpoint file exceeds size limit (prevents OOM).
         """
         path = self._get_checkpoint_path(checkpoint_id)
         if not path.exists():
             return None
+
+        # Check file size before loading to prevent OOM attacks
+        file_size = path.stat().st_size
+        if file_size > self.MAX_CHECKPOINT_SIZE:
+            raise ValueError(
+                f"Checkpoint file exceeds size limit: {file_size} bytes "
+                f"(max: {self.MAX_CHECKPOINT_SIZE} bytes). "
+                "This may indicate a malicious or corrupted checkpoint file."
+            )
 
         with open(path) as f:
             data = json.load(f)
@@ -446,23 +497,30 @@ class CheckpointManager:
         return checkpoints
 
 
-# Global checkpoint manager (can be overridden)
-_default_checkpoint_manager: CheckpointManager | None = None
+# Cache of checkpoint managers by directory (resolved path as key)
+_checkpoint_managers: dict[Path, CheckpointManager] = {}
 
 
 def get_checkpoint_manager(checkpoint_dir: str | Path = "./checkpoints") -> CheckpointManager:
-    """Get or create the default checkpoint manager.
+    """Get or create a checkpoint manager for the specified directory.
+
+    This function caches managers per directory to avoid creating multiple
+    managers for the same directory while correctly handling different directories.
 
     Args:
         checkpoint_dir: Directory for checkpoints.
 
     Returns:
-        CheckpointManager instance.
+        CheckpointManager instance for the specified directory.
+
+    Note:
+        Unlike a simple singleton, this properly respects the checkpoint_dir
+        parameter. Each unique directory gets its own cached manager.
     """
-    global _default_checkpoint_manager
-    if _default_checkpoint_manager is None:
-        _default_checkpoint_manager = CheckpointManager(checkpoint_dir)
-    return _default_checkpoint_manager
+    resolved_dir = Path(checkpoint_dir).resolve()
+    if resolved_dir not in _checkpoint_managers:
+        _checkpoint_managers[resolved_dir] = CheckpointManager(checkpoint_dir)
+    return _checkpoint_managers[resolved_dir]
 
 
 def clear_checkpoints(checkpoint_dir: str | Path = "./checkpoints") -> int:
@@ -1331,9 +1389,12 @@ class FeedbackLoopOrchestrator:
             Status can be: "completed", "stopped", "timeout", "max_iterations"
         """
         # Generate checkpoint ID for this task
+        # Use unique=False for deterministic IDs that enable task-based resumption
         checkpoint_id = None
         if self.checkpoint_manager:
-            checkpoint_id = self.checkpoint_manager.generate_checkpoint_id(task, "feedback_loop")
+            checkpoint_id = self.checkpoint_manager.generate_checkpoint_id(
+                task, "feedback_loop", unique=False
+            )
 
             # Check for existing checkpoint (auto-resume)
             existing = self.checkpoint_manager.load(checkpoint_id)
