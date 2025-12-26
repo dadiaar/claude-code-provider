@@ -178,9 +178,44 @@ class CLIResult:
 
     @property
     def input_tokens(self) -> int:
-        """Get input token count."""
+        """Get total input token count including cache tokens.
+
+        Claude Code CLI reports input tokens in three separate fields:
+        - input_tokens: New tokens not from cache
+        - cache_creation_input_tokens: Tokens written to cache
+        - cache_read_input_tokens: Tokens read from cache
+
+        This property returns the sum of all three.
+        For individual components, use raw_input_tokens, cache_creation_tokens,
+        and cache_read_tokens properties.
+        """
+        if self.usage:
+            return (
+                self.usage.get("input_tokens", 0) +
+                self.usage.get("cache_creation_input_tokens", 0) +
+                self.usage.get("cache_read_input_tokens", 0)
+            )
+        return 0
+
+    @property
+    def raw_input_tokens(self) -> int:
+        """Get raw input tokens (new tokens, not from cache)."""
         if self.usage:
             return self.usage.get("input_tokens", 0)
+        return 0
+
+    @property
+    def cache_creation_tokens(self) -> int:
+        """Get tokens written to cache during this request."""
+        if self.usage:
+            return self.usage.get("cache_creation_input_tokens", 0)
+        return 0
+
+    @property
+    def cache_read_tokens(self) -> int:
+        """Get tokens read from cache during this request."""
+        if self.usage:
+            return self.usage.get("cache_read_input_tokens", 0)
         return 0
 
     @property
@@ -189,6 +224,26 @@ class CLIResult:
         if self.usage:
             return self.usage.get("output_tokens", 0)
         return 0
+
+    @property
+    def token_breakdown(self) -> dict[str, int]:
+        """Get detailed token breakdown.
+
+        Returns:
+            Dictionary with all token counts:
+            - input_tokens: Total input (sum of raw + cache)
+            - raw_input_tokens: New tokens not from cache
+            - cache_creation_tokens: Tokens written to cache
+            - cache_read_tokens: Tokens read from cache
+            - output_tokens: Output tokens
+        """
+        return {
+            "input_tokens": self.input_tokens,
+            "raw_input_tokens": self.raw_input_tokens,
+            "cache_creation_tokens": self.cache_creation_tokens,
+            "cache_read_tokens": self.cache_read_tokens,
+            "output_tokens": self.output_tokens,
+        }
 
 
 @dataclass

@@ -145,6 +145,38 @@ if tracker.is_over_budget():
 print(f"Remaining: ${tracker.get_remaining_budget():.2f}")
 ```
 
+### Token Breakdown
+
+Claude Code CLI reports input tokens in three categories for cache-aware billing:
+
+```python
+from claude_code_provider._cli_executor import CLIResult
+
+# After a CLI execution, access detailed token breakdown:
+result: CLIResult = ...  # From executor.execute()
+
+# Total input tokens (sum of all three)
+print(f"Total input: {result.input_tokens}")
+
+# Individual components
+print(f"Raw input (new tokens): {result.raw_input_tokens}")
+print(f"Cache creation: {result.cache_creation_tokens}")
+print(f"Cache read: {result.cache_read_tokens}")
+print(f"Output: {result.output_tokens}")
+
+# Or get all at once
+breakdown = result.token_breakdown
+# {
+#   "input_tokens": 18305,       # Total
+#   "raw_input_tokens": 5,       # New tokens
+#   "cache_creation_tokens": 4000,
+#   "cache_read_tokens": 14300,
+#   "output_tokens": 500,
+# }
+```
+
+This breakdown is also preserved in `ChatResponse.usage_details.additional_counts` for MAF integration.
+
 ---
 
 ## Multi-Model Routing

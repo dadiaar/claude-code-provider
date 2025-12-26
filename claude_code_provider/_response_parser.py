@@ -21,6 +21,29 @@ except ImportError:
     from _cli_executor import CLIResult, StreamEvent
 
 
+def _calculate_total_input_tokens(usage: dict) -> int:
+    """Calculate total input tokens including cache tokens.
+
+    Claude Code CLI reports input tokens in three separate fields:
+    - input_tokens: New tokens not from cache
+    - cache_creation_input_tokens: Tokens written to cache
+    - cache_read_input_tokens: Tokens read from cache
+
+    The total input tokens is the sum of all three.
+
+    Args:
+        usage: Usage dictionary from CLI response.
+
+    Returns:
+        Total input token count.
+    """
+    return (
+        usage.get("input_tokens", 0) +
+        usage.get("cache_creation_input_tokens", 0) +
+        usage.get("cache_read_input_tokens", 0)
+    )
+
+
 def parse_cli_result_to_response(result: CLIResult) -> ChatResponse:
     """Convert a CLIResult to a MAF ChatResponse.
 
@@ -42,17 +65,20 @@ def parse_cli_result_to_response(result: CLIResult) -> ChatResponse:
         raw_representation=result.raw_response,
     )
 
-    # Parse usage
+    # Parse usage - include all input token types (regular + cache)
     usage = None
     if result.usage:
-        input_tokens = result.usage.get("input_tokens", 0)
+        input_tokens = _calculate_total_input_tokens(result.usage)
         output_tokens = result.usage.get("output_tokens", 0)
         usage = UsageDetails(
             input_token_count=input_tokens,
             output_token_count=output_tokens,
             total_token_count=input_tokens + output_tokens,
         )
-        # Add cache tokens if available
+        # Also store raw token breakdown for cost calculation
+        # (cache tokens may have different pricing)
+        if "input_tokens" in result.usage:
+            usage.additional_counts["raw_input_tokens"] = result.usage["input_tokens"]
         if "cache_creation_input_tokens" in result.usage:
             usage.additional_counts["cache_creation_input_tokens"] = result.usage[
                 "cache_creation_input_tokens"
@@ -109,12 +135,12 @@ def parse_stream_event_to_update(event: StreamEvent) -> ChatResponseUpdate | Non
         if not contents:
             return None
 
-        # Parse usage from message
+        # Parse usage from message - include all input token types
         usage = None
         usage_data = message_data.get("usage")
         if usage_data:
             usage = UsageDetails(
-                input_token_count=usage_data.get("input_tokens", 0),
+                input_token_count=_calculate_total_input_tokens(usage_data),
                 output_token_count=usage_data.get("output_tokens", 0),
             )
 
@@ -135,12 +161,12 @@ def parse_stream_event_to_update(event: StreamEvent) -> ChatResponseUpdate | Non
         session_id = event.data.get("session_id")
         contents = []  # Don't add result_text - it's already in assistant events
 
-        # Parse final usage
+        # Parse final usage - include all input token types
         usage = None
         usage_data = event.data.get("usage")
         if usage_data:
             usage = UsageDetails(
-                input_token_count=usage_data.get("input_tokens", 0),
+                input_token_count=_calculate_total_input_tokens(usage_data),
                 output_token_count=usage_data.get("output_tokens", 0),
             )
 

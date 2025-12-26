@@ -199,6 +199,146 @@ class TestResponseParser:
         response = parse_cli_result_to_response(result)
         assert response.usage_details is None
 
+    def test_parse_cli_result_with_cache_tokens(self):
+        """Test parsing result with cache tokens included in total."""
+        from claude_code_provider._cli_executor import CLIResult
+        from claude_code_provider._response_parser import parse_cli_result_to_response
+
+        # Simulate typical Claude CLI response with cache tokens
+        result = CLIResult(
+            success=True,
+            result="Test response",
+            session_id="test-session",
+            usage={
+                "input_tokens": 5,  # Raw new tokens
+                "cache_creation_input_tokens": 4000,
+                "cache_read_input_tokens": 14000,
+                "output_tokens": 500,
+            },
+        )
+
+        response = parse_cli_result_to_response(result)
+
+        # Total input should be sum of all three
+        assert response.usage_details.input_token_count == 5 + 4000 + 14000
+        assert response.usage_details.output_token_count == 500
+
+        # Raw breakdown should be preserved in additional_counts
+        assert response.usage_details.additional_counts["raw_input_tokens"] == 5
+        assert response.usage_details.additional_counts["cache_creation_input_tokens"] == 4000
+        assert response.usage_details.additional_counts["cache_read_input_tokens"] == 14000
+
+
+class TestCLIResultTokens:
+    """Test CLIResult token counting properties."""
+
+    def test_input_tokens_includes_cache(self):
+        """Test that input_tokens property sums all input types."""
+        from claude_code_provider._cli_executor import CLIResult
+
+        result = CLIResult(
+            success=True,
+            result="test",
+            usage={
+                "input_tokens": 10,
+                "cache_creation_input_tokens": 5000,
+                "cache_read_input_tokens": 15000,
+                "output_tokens": 100,
+            },
+        )
+
+        assert result.input_tokens == 10 + 5000 + 15000
+        assert result.output_tokens == 100
+
+    def test_raw_input_tokens_property(self):
+        """Test raw_input_tokens returns only non-cached tokens."""
+        from claude_code_provider._cli_executor import CLIResult
+
+        result = CLIResult(
+            success=True,
+            result="test",
+            usage={
+                "input_tokens": 42,
+                "cache_creation_input_tokens": 1000,
+                "cache_read_input_tokens": 2000,
+            },
+        )
+
+        assert result.raw_input_tokens == 42
+
+    def test_cache_creation_tokens_property(self):
+        """Test cache_creation_tokens property."""
+        from claude_code_provider._cli_executor import CLIResult
+
+        result = CLIResult(
+            success=True,
+            result="test",
+            usage={"cache_creation_input_tokens": 5555},
+        )
+
+        assert result.cache_creation_tokens == 5555
+
+    def test_cache_read_tokens_property(self):
+        """Test cache_read_tokens property."""
+        from claude_code_provider._cli_executor import CLIResult
+
+        result = CLIResult(
+            success=True,
+            result="test",
+            usage={"cache_read_input_tokens": 9999},
+        )
+
+        assert result.cache_read_tokens == 9999
+
+    def test_token_breakdown_dict(self):
+        """Test token_breakdown returns complete breakdown."""
+        from claude_code_provider._cli_executor import CLIResult
+
+        result = CLIResult(
+            success=True,
+            result="test",
+            usage={
+                "input_tokens": 5,
+                "cache_creation_input_tokens": 1000,
+                "cache_read_input_tokens": 2000,
+                "output_tokens": 300,
+            },
+        )
+
+        breakdown = result.token_breakdown
+        assert breakdown["input_tokens"] == 3005  # Total
+        assert breakdown["raw_input_tokens"] == 5
+        assert breakdown["cache_creation_tokens"] == 1000
+        assert breakdown["cache_read_tokens"] == 2000
+        assert breakdown["output_tokens"] == 300
+
+    def test_missing_cache_tokens_default_to_zero(self):
+        """Test that missing cache token fields default to zero."""
+        from claude_code_provider._cli_executor import CLIResult
+
+        result = CLIResult(
+            success=True,
+            result="test",
+            usage={"input_tokens": 100, "output_tokens": 50},
+        )
+
+        assert result.input_tokens == 100  # No cache to add
+        assert result.raw_input_tokens == 100
+        assert result.cache_creation_tokens == 0
+        assert result.cache_read_tokens == 0
+
+    def test_no_usage_returns_zeros(self):
+        """Test that missing usage dict returns zeros."""
+        from claude_code_provider._cli_executor import CLIResult
+
+        result = CLIResult(success=True, result="test", usage=None)
+
+        assert result.input_tokens == 0
+        assert result.raw_input_tokens == 0
+        assert result.cache_creation_tokens == 0
+        assert result.cache_read_tokens == 0
+        assert result.output_tokens == 0
+
 
 class TestCLIExecutor:
     """Test CLI executor (unit tests only, no actual CLI calls)."""
