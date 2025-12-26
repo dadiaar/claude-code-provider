@@ -544,6 +544,56 @@ class TestRetry:
 
         asyncio.run(run())
 
+    def test_circuit_breaker_recovery_timeout(self):
+        """Test circuit breaker recovers after timeout (uses monotonic time)."""
+        from claude_code_provider._retry import CircuitBreaker
+        import time
+
+        async def run():
+            # Use very short timeout for testing
+            cb = CircuitBreaker(failure_threshold=2, recovery_timeout=0.1)
+
+            # Trigger open state
+            await cb.record_failure()
+            await cb.record_failure()
+            assert cb.state == "OPEN"
+            assert await cb.can_execute() is False
+
+            # Wait for recovery timeout
+            time.sleep(0.15)
+
+            # Should transition to HALF_OPEN and allow execution
+            assert await cb.can_execute() is True
+            assert cb.state == "HALF_OPEN"
+
+        asyncio.run(run())
+
+    def test_circuit_breaker_uses_monotonic_time(self):
+        """Test that circuit breaker uses monotonic time for timing.
+
+        This test verifies the fix for issue #7 - using time.monotonic()
+        instead of time.time() prevents issues with clock adjustments.
+        """
+        from claude_code_provider._retry import CircuitBreaker
+        import time
+
+        async def run():
+            cb = CircuitBreaker(failure_threshold=1, recovery_timeout=0.1)
+
+            # Record failure and check that _last_failure_time is set
+            await cb.record_failure()
+            assert cb._last_failure_time is not None
+
+            # Verify it's a monotonic timestamp (should be close to time.monotonic())
+            # Monotonic time is typically much smaller than wall-clock time
+            # (seconds since boot vs seconds since epoch)
+            current_monotonic = time.monotonic()
+            assert cb._last_failure_time <= current_monotonic
+            # Should be within the last second
+            assert current_monotonic - cb._last_failure_time < 1.0
+
+        asyncio.run(run())
+
 
 class TestClaudeAgent:
     """Test ClaudeAgent wrapper functionality."""

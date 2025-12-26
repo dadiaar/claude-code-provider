@@ -5,6 +5,7 @@
 import asyncio
 import logging
 import random
+import time
 from dataclasses import dataclass, field
 from typing import Awaitable, Callable, TypeVar, Any
 
@@ -135,9 +136,17 @@ class CircuitBreaker:
         recovery_timeout: Seconds to wait before trying again.
         success_threshold: Successes needed in HALF_OPEN to close circuit.
 
-    Note:
-        This implementation is thread-safe for async contexts using asyncio.Lock.
-        All state mutations are protected by the lock.
+    Thread-Safety:
+        This implementation uses asyncio.Lock for concurrency safety within
+        a single event loop. All state mutations are protected by the lock.
+
+        Important: Each CircuitBreaker instance is bound to the event loop
+        where it's first used. Do NOT share instances across different event
+        loops (e.g., across threads in multi-worker deployments). Instead,
+        create separate CircuitBreaker instances per event loop or thread.
+
+        For multi-worker applications (e.g., uvicorn with multiple workers),
+        each worker process has its own memory space and CircuitBreaker.
     """
 
     failure_threshold: int = 5
@@ -164,11 +173,9 @@ class CircuitBreaker:
 
     async def record_failure(self) -> None:
         """Record a failed call (async for thread safety)."""
-        import time
-
         async with self._lock:
             self._failures += 1
-            self._last_failure_time = time.time()
+            self._last_failure_time = time.monotonic()
 
             if self._state == "HALF_OPEN":
                 self._open()
@@ -181,8 +188,6 @@ class CircuitBreaker:
         Returns:
             True if the call should proceed, False if circuit is open.
         """
-        import time
-
         async with self._lock:
             if self._state == "CLOSED":
                 return True
@@ -190,7 +195,7 @@ class CircuitBreaker:
             if self._state == "OPEN":
                 # Check if recovery timeout has passed
                 if self._last_failure_time is not None:
-                    elapsed = time.time() - self._last_failure_time
+                    elapsed = time.monotonic() - self._last_failure_time
                     if elapsed >= self.recovery_timeout:
                         self._half_open()
                         return True
