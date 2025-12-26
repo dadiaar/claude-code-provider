@@ -654,6 +654,30 @@ class TestRetry:
 
         asyncio.run(run())
 
+    @pytest.mark.asyncio
+    async def test_retry_callback_exception_handling(self):
+        """Test that callback exceptions don't break retry logic (fix for #22)."""
+        from claude_code_provider._retry import retry_async, RetryConfig
+
+        call_count = 0
+
+        async def flaky_func():
+            nonlocal call_count
+            call_count += 1
+            if call_count < 3:
+                raise ConnectionError("Test error")
+            return "success"
+
+        def bad_callback(attempt, exc):
+            raise RuntimeError("Callback error!")
+
+        config = RetryConfig(max_retries=3, base_delay=0.01, jitter=False)
+        result = await retry_async(flaky_func, config=config, on_retry=bad_callback)
+
+        # Should still succeed despite callback errors
+        assert result == "success"
+        assert call_count == 3
+
 
 class TestClaudeAgent:
     """Test ClaudeAgent wrapper functionality."""
@@ -1187,6 +1211,23 @@ class TestModelRouting:
         context = RoutingContext(prompt="Any prompt")
         model = router.select_model(context)
         assert model == "haiku"  # Budget constrained
+
+    def test_complexity_router_precompiled_patterns(self):
+        """Test ComplexityRouter uses pre-compiled patterns (fix for #27)."""
+        from claude_code_provider import ComplexityRouter
+        import re
+
+        router = ComplexityRouter()
+
+        # Verify patterns are pre-compiled
+        assert hasattr(router, '_compiled_code_patterns')
+        assert len(router._compiled_code_patterns) > 0
+        assert all(isinstance(p, re.Pattern) for p in router._compiled_code_patterns)
+
+        # Verify code detection works with pre-compiled patterns
+        assert router._has_code("```python\nprint('hello')\n```")
+        assert router._has_code("def my_function(x):")
+        assert not router._has_code("just plain text")
 
 
 class TestLogging:

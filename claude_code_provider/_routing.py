@@ -102,12 +102,17 @@ class ComplexityRouter(RoutingStrategy):
         self.simple_threshold = simple_threshold
         self.complex_threshold = complex_threshold
 
-        self.code_patterns = code_patterns or [
+        # Pre-compile regex patterns for performance (fix for #27)
+        # This avoids recompiling on every call to _has_code()
+        pattern_strings = code_patterns or [
             r"```\w*\n",  # Code blocks
             r"def\s+\w+",  # Python functions
             r"function\s+\w+",  # JavaScript functions
             r"class\s+\w+",  # Classes
             r"import\s+\w+",  # Imports
+        ]
+        self._compiled_code_patterns = [
+            re.compile(p, re.IGNORECASE) for p in pattern_strings
         ]
 
         self.reasoning_keywords = reasoning_keywords or [
@@ -122,9 +127,12 @@ class ComplexityRouter(RoutingStrategy):
         return len(text) // 4
 
     def _has_code(self, text: str) -> bool:
-        """Check if text contains code."""
-        for pattern in self.code_patterns:
-            if re.search(pattern, text, re.IGNORECASE):
+        """Check if text contains code.
+
+        Uses pre-compiled patterns for performance (fix for #27).
+        """
+        for pattern in self._compiled_code_patterns:
+            if pattern.search(text):
                 return True
         return False
 
