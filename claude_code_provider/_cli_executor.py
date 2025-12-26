@@ -603,8 +603,13 @@ class CLIExecutor:
         if effective_model:
             args.extend(["--model", effective_model])
 
-        # Session resumption
+        # Session resumption (validate like checkpoint_id)
         if session_id:
+            if not session_id or not all(c.isalnum() or c in '_-' for c in session_id):
+                raise ValueError(
+                    f"Invalid session_id format: '{session_id}'. "
+                    "Only alphanumeric characters, underscores, and hyphens allowed."
+                )
             args.extend(["--resume", session_id])
 
         # System prompt (also check for size)
@@ -629,7 +634,8 @@ class CLIExecutor:
             args.extend(["--max-turns", str(effective_max_turns)])
 
         # Add settings-based args (tools, permissions, etc.)
-        args.extend(self.settings.to_cli_args())
+        # Exclude model and max_turns since we already handle them above with overrides
+        args.extend(self.settings.to_cli_args(exclude={"model", "max_turns"}))
 
         # Extra args (already validated)
         if validated_extra_args:

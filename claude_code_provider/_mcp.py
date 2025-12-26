@@ -3,12 +3,14 @@
 """MCP (Model Context Protocol) server management."""
 
 import asyncio
+import ipaddress
 import json
 import logging
 import re
 from dataclasses import dataclass, field
 from enum import Enum
 from typing import Any
+from urllib.parse import urlparse
 
 logger = logging.getLogger("claude_code_provider")
 
@@ -18,6 +20,87 @@ _SERVER_NAME_PATTERN = re.compile(r'^[a-zA-Z][a-zA-Z0-9_-]*$')
 _ENV_VAR_NAME_PATTERN = re.compile(r'^[A-Za-z_][A-Za-z0-9_]*$')
 # Dangerous shell metacharacters that should not appear in commands/args
 _DANGEROUS_CHARS = set(';&|`$(){}[]<>!#')
+
+# Hostnames that should be blocked for SSRF prevention
+_BLOCKED_HOSTNAMES = frozenset({
+    'localhost',
+    'localhost.localdomain',
+    'ip6-localhost',
+    'ip6-loopback',
+})
+
+
+def _is_private_ip(ip_str: str) -> bool:
+    """Check if an IP address is private/internal.
+
+    Args:
+        ip_str: IP address string.
+
+    Returns:
+        True if the IP is private/internal, False otherwise.
+    """
+    try:
+        ip = ipaddress.ip_address(ip_str)
+        return (
+            ip.is_private
+            or ip.is_loopback
+            or ip.is_link_local
+            or ip.is_reserved
+            or ip.is_multicast
+        )
+    except ValueError:
+        return False
+
+
+def _validate_mcp_url(url: str) -> str:
+    """Validate an MCP server URL for SSRF prevention.
+
+    Args:
+        url: URL to validate.
+
+    Returns:
+        The validated URL.
+
+    Raises:
+        ValueError: If URL is invalid or points to internal resources.
+    """
+    if not isinstance(url, str) or not url:
+        raise ValueError("MCP URL must be a non-empty string")
+
+    try:
+        parsed = urlparse(url)
+    except Exception as e:
+        raise ValueError(f"Invalid URL format: {e}")
+
+    # Check scheme
+    if parsed.scheme not in ('http', 'https'):
+        raise ValueError(
+            f"MCP URL must use http or https scheme, got: {parsed.scheme}"
+        )
+
+    # Check for blocked hostnames
+    hostname = parsed.hostname or ''
+    hostname_lower = hostname.lower()
+
+    if hostname_lower in _BLOCKED_HOSTNAMES:
+        raise ValueError(
+            f"MCP URL cannot point to localhost or loopback: {hostname}"
+        )
+
+    # Check for private/internal IP addresses
+    if _is_private_ip(hostname):
+        raise ValueError(
+            f"MCP URL cannot point to private/internal IP address: {hostname}"
+        )
+
+    # Check for embedded credentials (potential security issue)
+    if parsed.username or parsed.password:
+        logger.warning(
+            f"MCP URL contains embedded credentials for server. "
+            "Consider using environment variables instead for security."
+        )
+
+    return url
 
 
 def _validate_server_name(name: str) -> str:
@@ -131,6 +214,9 @@ class MCPServer:
             _validate_command_or_arg(self.command_or_url, "command")
             for i, arg in enumerate(self.args):
                 _validate_command_or_arg(arg, f"args[{i}]")
+        else:
+            # For HTTP/SSE transport, validate URL for SSRF prevention
+            _validate_mcp_url(self.command_or_url)
 
         # Validate environment variable names
         for env_name in self.env.keys():

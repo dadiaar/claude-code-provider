@@ -28,6 +28,14 @@ VALID_PERMISSION_MODES = frozenset({
     "plan",
 })
 
+# Directories that should not be used as working directories for security
+_FORBIDDEN_WORKING_DIRS = frozenset({
+    "/", "/etc", "/bin", "/sbin", "/usr/bin", "/usr/sbin",
+    "/boot", "/dev", "/proc", "/sys", "/var/run",
+    "/lib", "/lib64", "/usr/lib", "/usr/lib64",
+    "/root", "/var/log", "/var/spool",
+})
+
 
 class ConfigurationError(Exception):
     """Raised when configuration validation fails.
@@ -231,7 +239,7 @@ class ClaudeCodeSettings:
             )
 
     def _validate_working_directory(self) -> None:
-        """Validate working directory exists and is a directory."""
+        """Validate working directory exists, is a directory, and is safe."""
         if self.working_directory is None:
             return
 
@@ -247,6 +255,27 @@ class ClaudeCodeSettings:
                 "working_directory",
                 f"Working directory '{self.working_directory}' is not a directory"
             )
+
+        # Security check: prevent using sensitive system directories
+        resolved = path.resolve()
+        resolved_str = str(resolved)
+
+        # Check exact matches first
+        if resolved_str in _FORBIDDEN_WORKING_DIRS:
+            raise ConfigurationError(
+                "working_directory",
+                f"Working directory '{resolved_str}' is a sensitive system directory "
+                "and cannot be used for security reasons."
+            )
+
+        # Check if path is under a forbidden directory
+        for forbidden in _FORBIDDEN_WORKING_DIRS:
+            if resolved_str.startswith(forbidden + "/"):
+                raise ConfigurationError(
+                    "working_directory",
+                    f"Working directory '{resolved_str}' is under sensitive system path "
+                    f"'{forbidden}' and cannot be used for security reasons."
+                )
 
     def _validate_tools(self) -> None:
         """Validate tools lists are valid string lists."""
@@ -273,18 +302,23 @@ class ClaudeCodeSettings:
                         f"Item {i} cannot be empty"
                     )
 
-    def to_cli_args(self) -> list[str]:
+    def to_cli_args(self, exclude: set[str] | None = None) -> list[str]:
         """Convert settings to CLI arguments.
+
+        Args:
+            exclude: Set of argument names to exclude (e.g., {"model", "max_turns"})
+                    to avoid duplication when caller handles them separately.
 
         Returns:
             List of CLI arguments based on current settings.
         """
         args: list[str] = []
+        exclude = exclude or set()
 
-        if self.model:
+        if self.model and "model" not in exclude:
             args.extend(["--model", self.model])
 
-        if self.default_max_turns is not None:
+        if self.default_max_turns is not None and "max_turns" not in exclude:
             args.extend(["--max-turns", str(self.default_max_turns)])
 
         if self.permission_mode:

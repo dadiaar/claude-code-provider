@@ -2118,6 +2118,191 @@ class TestSecurity:
         except ValueError as e:
             assert "null" in str(e).lower() or "invalid" in str(e).lower()
 
+    # =========================================================================
+    # Tests for demo 29 findings - Bug fixes
+    # =========================================================================
+
+    def test_session_id_validation(self):
+        """Test that session_id is validated like checkpoint_id."""
+        from claude_code_provider import ClaudeCodeSettings
+        from claude_code_provider._cli_executor import CLIExecutor
+
+        settings = ClaudeCodeSettings()
+        executor = CLIExecutor(settings)
+
+        # Valid session IDs should work
+        valid_ids = ["session-123", "session_abc", "abc123", "A1B2C3"]
+        for sid in valid_ids:
+            args, _ = executor._build_args(
+                prompt="test",
+                session_id=sid,
+            )
+            assert "--resume" in args
+            assert sid in args
+
+        # Invalid session IDs should be rejected
+        invalid_ids = [
+            "session;rm -rf /",  # Shell injection
+            "../../../etc/passwd",  # Path traversal
+            "session\x00evil",  # Null byte
+            "session$(whoami)",  # Command substitution
+            "session`id`",  # Backtick execution
+        ]
+        for sid in invalid_ids:
+            try:
+                executor._build_args(prompt="test", session_id=sid)
+                assert False, f"Should reject invalid session_id: {sid}"
+            except ValueError as e:
+                assert "Invalid session_id" in str(e)
+
+    def test_no_duplicate_cli_args(self):
+        """Test that --model and --max-turns are not added twice."""
+        from claude_code_provider import ClaudeCodeSettings
+        from claude_code_provider._cli_executor import CLIExecutor
+
+        settings = ClaudeCodeSettings(model="sonnet", default_max_turns=5)
+        executor = CLIExecutor(settings)
+
+        args, _ = executor._build_args(prompt="test")
+
+        # Count occurrences
+        model_count = args.count("--model")
+        max_turns_count = args.count("--max-turns")
+
+        assert model_count == 1, f"Expected 1 --model, got {model_count}"
+        assert max_turns_count == 1, f"Expected 1 --max-turns, got {max_turns_count}"
+
+    def test_to_cli_args_exclude_parameter(self):
+        """Test that to_cli_args respects the exclude parameter."""
+        from claude_code_provider import ClaudeCodeSettings
+
+        settings = ClaudeCodeSettings(
+            model="sonnet",
+            default_max_turns=5,
+            permission_mode="default",
+        )
+
+        # Without exclude - includes everything
+        args = settings.to_cli_args()
+        assert "--model" in args
+        assert "--max-turns" in args
+        assert "--permission-mode" in args
+
+        # With exclude - omits specified args
+        args = settings.to_cli_args(exclude={"model", "max_turns"})
+        assert "--model" not in args
+        assert "--max-turns" not in args
+        assert "--permission-mode" in args  # Not excluded
+
+    def test_mcp_url_ssrf_prevention(self):
+        """Test that MCP URLs are validated to prevent SSRF attacks."""
+        from claude_code_provider._mcp import _validate_mcp_url
+
+        # Valid external URLs should work
+        valid_urls = [
+            "https://api.example.com/mcp",
+            "http://external-service.com:8080/",
+        ]
+        for url in valid_urls:
+            result = _validate_mcp_url(url)
+            assert result == url
+
+        # Internal/private URLs should be rejected
+        invalid_urls = [
+            "http://localhost:8080/",
+            "http://127.0.0.1/",
+            "http://192.168.1.1/",
+            "http://10.0.0.1/",
+            "http://169.254.169.254/",  # AWS metadata
+            "http://[::1]/",  # IPv6 loopback
+            "ftp://example.com/",  # Wrong scheme
+        ]
+        for url in invalid_urls:
+            try:
+                _validate_mcp_url(url)
+                assert False, f"Should reject SSRF-prone URL: {url}"
+            except ValueError:
+                pass
+
+    def test_mcp_server_validates_http_url(self):
+        """Test that MCPServer validates HTTP URLs on creation."""
+        from claude_code_provider import MCPServer, MCPTransport
+
+        # Valid external URL should work
+        server = MCPServer(
+            name="external",
+            command_or_url="https://api.example.com/mcp",
+            transport=MCPTransport.HTTP,
+        )
+        assert server.command_or_url == "https://api.example.com/mcp"
+
+        # Internal URL should fail
+        try:
+            MCPServer(
+                name="internal",
+                command_or_url="http://localhost:8080/",
+                transport=MCPTransport.HTTP,
+            )
+            assert False, "Should reject localhost URL"
+        except ValueError as e:
+            assert "localhost" in str(e).lower() or "loopback" in str(e).lower()
+
+    def test_working_directory_security(self):
+        """Test that working_directory rejects sensitive system paths."""
+        from claude_code_provider import ClaudeCodeSettings, ConfigurationError
+        import tempfile
+        import os
+
+        # Valid working directory should work (use temp dir)
+        with tempfile.TemporaryDirectory() as tmpdir:
+            settings = ClaudeCodeSettings(working_directory=tmpdir)
+            assert settings.working_directory == tmpdir
+
+        # System directories should be rejected
+        forbidden_dirs = ["/etc", "/bin", "/root", "/boot"]
+        for dir_path in forbidden_dirs:
+            if os.path.exists(dir_path):
+                try:
+                    ClaudeCodeSettings(working_directory=dir_path)
+                    assert False, f"Should reject system directory: {dir_path}"
+                except ConfigurationError as e:
+                    assert "sensitive" in str(e).lower() or "security" in str(e).lower()
+
+    def test_retry_async_typevar_binding(self):
+        """Test that retry_async properly binds return type."""
+        import asyncio
+        from claude_code_provider._retry import retry_async, RetryConfig
+
+        async def returns_int() -> int:
+            return 42
+
+        async def returns_str() -> str:
+            return "hello"
+
+        # Run the tests using asyncio.run for newer Python versions
+        result_int = asyncio.run(
+            retry_async(returns_int, config=RetryConfig(max_retries=0))
+        )
+        assert result_int == 42
+        assert isinstance(result_int, int)
+
+        result_str = asyncio.run(
+            retry_async(returns_str, config=RetryConfig(max_retries=0))
+        )
+        assert result_str == "hello"
+        assert isinstance(result_str, str)
+
+    def test_session_manager_thread_safety(self):
+        """Test that SessionManager has a lock for thread safety."""
+        from claude_code_provider._sessions import SessionManager
+        import threading
+
+        manager = SessionManager(storage_path="/tmp/test_sessions.json")
+
+        # Verify lock exists
+        assert hasattr(manager, '_lock')
+        assert isinstance(manager._lock, type(threading.Lock()))
+
 
 # =============================================================================
 # TEST RUNNER

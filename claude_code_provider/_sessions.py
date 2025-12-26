@@ -7,6 +7,7 @@ import json
 import logging
 import os
 import stat
+import threading
 from dataclasses import dataclass, field
 from datetime import datetime
 from pathlib import Path
@@ -201,6 +202,7 @@ class SessionManager:
         """
         self.cli_path = cli_path
         self._sessions: dict[str, SessionInfo] = {}
+        self._lock = threading.Lock()  # Protect concurrent session modifications
 
         # Default storage in home directory
         if storage_path is None:
@@ -262,23 +264,24 @@ class SessionManager:
         Returns:
             SessionInfo for the tracked session.
         """
-        if session_id in self._sessions:
-            info = self._sessions[session_id]
-            info.last_used = datetime.now()
-            info.message_count += 1
-            if model:
-                info.model = model
-            info.metadata.update(metadata)
-        else:
-            info = SessionInfo(
-                session_id=session_id,
-                model=model,
-                metadata=metadata,
-            )
-            self._sessions[session_id] = info
+        with self._lock:
+            if session_id in self._sessions:
+                info = self._sessions[session_id]
+                info.last_used = datetime.now()
+                info.message_count += 1
+                if model:
+                    info.model = model
+                info.metadata.update(metadata)
+            else:
+                info = SessionInfo(
+                    session_id=session_id,
+                    model=model,
+                    metadata=metadata,
+                )
+                self._sessions[session_id] = info
 
-        self._save_sessions()
-        return info
+            self._save_sessions()
+            return info
 
     def get_session(self, session_id: str) -> SessionInfo | None:
         """Get session info.

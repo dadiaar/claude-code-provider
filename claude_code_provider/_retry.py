@@ -6,11 +6,12 @@ import asyncio
 import logging
 import random
 from dataclasses import dataclass, field
-from typing import Callable, TypeVar, Any
+from typing import Awaitable, Callable, TypeVar, Any
 
 logger = logging.getLogger("claude_code_provider")
 
 T = TypeVar("T")
+R = TypeVar("R")  # Return type for retry functions
 
 
 @dataclass
@@ -62,12 +63,12 @@ class RetryConfig:
 
 
 async def retry_async(
-    func: Callable[..., Any],
+    func: Callable[..., Awaitable[R]],
     *args: Any,
     config: RetryConfig | None = None,
     on_retry: Callable[[int, Exception], None] | None = None,
     **kwargs: Any,
-) -> T:
+) -> R:
     """Execute an async function with retry logic.
 
     Args:

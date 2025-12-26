@@ -9,11 +9,30 @@ from dataclasses import dataclass, field
 from datetime import datetime
 from enum import Enum
 from string import Template
-from typing import Any, Callable, TypeVar
+from typing import TYPE_CHECKING, Any, Callable, Protocol, TypeVar, runtime_checkable
+
+if TYPE_CHECKING:
+    from ._chat_client import ClaudeCodeClient
 
 logger = logging.getLogger("claude_code_provider")
 
 T = TypeVar("T")
+
+
+@runtime_checkable
+class ChatClientProtocol(Protocol):
+    """Protocol for chat clients used in batch processing."""
+
+    async def get_response(
+        self,
+        prompt: str,
+        *,
+        system_prompt: str | None = None,
+        model: str | None = None,
+        **kwargs: Any,
+    ) -> Any:
+        """Get a response from the chat client."""
+        ...
 
 
 class BatchStatus(str, Enum):
@@ -165,7 +184,7 @@ class BatchProcessor:
 
     def __init__(
         self,
-        client: Any,
+        client: "ChatClientProtocol | ClaudeCodeClient",
         default_concurrency: int = 3,
         retry_failed: bool = True,
         max_retries: int = 2,
@@ -173,12 +192,12 @@ class BatchProcessor:
         """Initialize batch processor.
 
         Args:
-            client: ClaudeCodeClient instance.
+            client: ClaudeCodeClient instance or any client implementing ChatClientProtocol.
             default_concurrency: Default number of concurrent requests.
             retry_failed: Whether to retry failed items.
             max_retries: Maximum retry attempts.
         """
-        self.client = client
+        self.client: ChatClientProtocol = client
         self.default_concurrency = default_concurrency
         self.retry_failed = retry_failed
         self.max_retries = max_retries
