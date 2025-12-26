@@ -7,6 +7,7 @@ import ipaddress
 import json
 import logging
 import re
+import unicodedata
 from dataclasses import dataclass, field
 from enum import Enum
 from typing import Any
@@ -19,7 +20,8 @@ logger = logging.getLogger("claude_code_provider")
 _SERVER_NAME_PATTERN = re.compile(r'^[a-zA-Z][a-zA-Z0-9_-]*$')
 _ENV_VAR_NAME_PATTERN = re.compile(r'^[A-Za-z_][A-Za-z0-9_]*$')
 # Dangerous shell metacharacters that should not appear in commands/args
-_DANGEROUS_CHARS = set(';&|`$(){}[]<>!#')
+# Includes: shell operators, quotes, escapes, wildcards, whitespace controls
+_DANGEROUS_CHARS = set(';&|`$(){}[]<>!#\n\r\t\'"\\*?~')
 
 # Hostnames that should be blocked for SSRF prevention
 _BLOCKED_HOSTNAMES = frozenset({
@@ -152,12 +154,15 @@ def _validate_env_var_name(name: str) -> str:
 def _validate_command_or_arg(value: str, field_name: str = "value") -> str:
     """Validate a command or argument for dangerous characters.
 
+    Performs Unicode NFKC normalization before validation to prevent
+    homoglyph bypass attacks (e.g., fullwidth semicolon U+FF1B → ASCII ;).
+
     Args:
         value: The value to validate.
         field_name: Name of the field for error messages.
 
     Returns:
-        The validated value.
+        The validated (and normalized) value.
 
     Raises:
         ValueError: If value contains dangerous characters.
@@ -165,13 +170,19 @@ def _validate_command_or_arg(value: str, field_name: str = "value") -> str:
     if not isinstance(value, str):
         raise ValueError(f"{field_name} must be a string")
 
-    dangerous_found = _DANGEROUS_CHARS.intersection(value)
+    # Normalize Unicode to NFKC to prevent homoglyph bypass attacks
+    # E.g., fullwidth semicolon (U+FF1B) normalizes to ASCII semicolon (U+003B)
+    normalized = unicodedata.normalize('NFKC', value)
+
+    dangerous_found = _DANGEROUS_CHARS.intersection(normalized)
     if dangerous_found:
+        # Show readable representation of dangerous chars found
+        char_repr = ', '.join(repr(c) for c in dangerous_found)
         raise ValueError(
-            f"{field_name} contains dangerous characters: {dangerous_found}. "
+            f"{field_name} contains dangerous characters: {char_repr}. "
             "Shell metacharacters are not allowed for security reasons."
         )
-    return value
+    return normalized
 
 
 class MCPTransport(str, Enum):

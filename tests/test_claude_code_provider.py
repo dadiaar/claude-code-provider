@@ -2190,6 +2190,50 @@ class TestSecurity:
             except ValueError as e:
                 assert "dangerous characters" in str(e)
 
+    def test_mcp_command_validation_extended_chars(self):
+        """Test MCP command validation for newlines, quotes, backslashes (fix for #5)."""
+        from claude_code_provider._mcp import _validate_command_or_arg
+
+        # Extended dangerous characters that were added
+        extended_dangerous = [
+            "cmd\nrm -rf /",      # Newline injection
+            "cmd\rmalicious",     # Carriage return
+            "cmd\tevil",          # Tab
+            "cmd'evil'",          # Single quote
+            'cmd"evil"',          # Double quote
+            "cmd\\evil",          # Backslash
+            "cmd*",               # Wildcard
+            "cmd?",               # Wildcard
+            "~/.ssh/id_rsa",      # Home directory expansion
+        ]
+        for cmd in extended_dangerous:
+            try:
+                _validate_command_or_arg(cmd)
+                assert False, f"Should reject: {repr(cmd)}"
+            except ValueError as e:
+                assert "dangerous characters" in str(e)
+
+    def test_mcp_command_validation_unicode_homoglyphs(self):
+        """Test MCP command validation blocks Unicode homoglyph bypass (fix for #15)."""
+        from claude_code_provider._mcp import _validate_command_or_arg
+
+        # Unicode homoglyphs that look like dangerous chars
+        homoglyph_tests = [
+            ("cmd\uff1brm", ";"),      # U+FF1B fullwidth semicolon
+            ("cmd\uff5c cat", "|"),    # U+FF5C fullwidth vertical line
+            ("cmd\u037e rm", ";"),     # U+037E Greek question mark (looks like ;)
+        ]
+        for cmd, expected_char in homoglyph_tests:
+            try:
+                _validate_command_or_arg(cmd)
+                assert False, f"Should reject Unicode homoglyph for '{expected_char}': {repr(cmd)}"
+            except ValueError as e:
+                assert "dangerous characters" in str(e)
+
+        # Valid Unicode that doesn't normalize to dangerous chars should pass
+        assert _validate_command_or_arg("héllo") == "héllo"
+        assert _validate_command_or_arg("日本語") == "日本語"
+
     def test_mcp_env_var_name_validation(self):
         """Test MCP environment variable name validation."""
         from claude_code_provider._mcp import _validate_env_var_name
