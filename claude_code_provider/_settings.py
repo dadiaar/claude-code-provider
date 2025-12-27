@@ -7,10 +7,38 @@ import platform
 import re
 import shutil
 from dataclasses import dataclass, field
+from enum import Enum
 from pathlib import Path
 from typing import Literal
 
 from ._exceptions import ClaudeCodeException
+
+
+class ClaudeModel(str, Enum):
+    """Supported Claude models with type-safe selection.
+
+    Example:
+        from claude_code_provider import ClaudeCodeClient, ClaudeModel
+
+        # Type-safe (IDE autocomplete, catches typos)
+        client = ClaudeCodeClient(model=ClaudeModel.SONNET)
+
+        # String still works (backward compatible)
+        client = ClaudeCodeClient(model="sonnet")
+    """
+    # Aliases (recommended)
+    SONNET = "sonnet"
+    OPUS = "opus"
+    HAIKU = "haiku"
+    # Full model names
+    SONNET_3_5 = "claude-3-5-sonnet-20241022"
+    HAIKU_3_5 = "claude-3-5-haiku-20241022"
+    OPUS_3 = "claude-3-opus-20240229"
+    SONNET_4 = "claude-sonnet-4-20250514"
+    OPUS_4 = "claude-opus-4-20250514"
+
+    def __str__(self) -> str:
+        return self.value
 
 
 # Valid model names and aliases

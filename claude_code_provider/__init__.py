@@ -17,7 +17,7 @@ Example:
 """
 
 try:
-    from ._settings import ClaudeCodeSettings, ConfigurationError, VALID_MODELS
+    from ._settings import ClaudeCodeSettings, ConfigurationError, VALID_MODELS, ClaudeModel
     from ._validation import ValidationError
     from ._chat_client import ClaudeCodeClient
     from ._agent import ClaudeAgent, CompactResult, UsageStats, ContextInfo
@@ -92,7 +92,7 @@ try:
         MAF_MAGENTIC_AVAILABLE,
     )
 except ImportError:
-    from _settings import ClaudeCodeSettings, ConfigurationError, VALID_MODELS
+    from _settings import ClaudeCodeSettings, ConfigurationError, VALID_MODELS, ClaudeModel
     from _validation import ValidationError
     from _chat_client import ClaudeCodeClient
     from _agent import ClaudeAgent, CompactResult, UsageStats, ContextInfo
@@ -174,6 +174,7 @@ __all__ = [
     "ConfigurationError",
     "ValidationError",
     "VALID_MODELS",
+    "ClaudeModel",
     "ClaudeAgent",
     "CompactResult",
     "UsageStats",
