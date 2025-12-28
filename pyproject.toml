@@ -54,10 +54,10 @@ packages = ["claude_code_provider"]
 include = [
     "claude_code_provider/*.py",
     "claude_code_provider/py.typed",
+    "claude_code_provider/examples/*.py",
 ]
 exclude = [
     "tests/",
-    "examples/",
 ]
 
 [tool.pytest.ini_options]

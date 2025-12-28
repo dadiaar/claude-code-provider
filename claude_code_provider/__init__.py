@@ -31,6 +31,7 @@ try:
         ClaudeCodeSessionError,
     )
     from ._retry import RetryConfig, CircuitBreaker
+    from ._process_pool import ClaudeProcessPool, PersistentProcess
     from ._mcp import MCPServer, MCPTransport, MCPManager, MCPServerInfo
     from ._cost import CostTracker, RequestCost, CostSummary
     from ._routing import (
@@ -106,6 +107,7 @@ except ImportError:
         ClaudeCodeSessionError,
     )
     from _retry import RetryConfig, CircuitBreaker
+    from _process_pool import ClaudeProcessPool, PersistentProcess
     from _mcp import MCPServer, MCPTransport, MCPManager, MCPServerInfo
     from _cost import CostTracker, RequestCost, CostSummary
     from _routing import (
@@ -190,6 +192,9 @@ __all__ = [
     # Retry/Resilience
     "RetryConfig",
     "CircuitBreaker",
+    # Process Pool
+    "ClaudeProcessPool",
+    "PersistentProcess",
     # MCP
     "MCPServer",
     "MCPTransport",
