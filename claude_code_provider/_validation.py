@@ -8,10 +8,12 @@ ensuring clear error messages for invalid inputs.
 
 from typing import Any, TypeVar
 
+from ._exceptions import ClaudeCodeException
+
 T = TypeVar("T")
 
 
-class ValidationError(ValueError):
+class ValidationError(ClaudeCodeException):
     """Raised when input validation fails.
 
     Attributes:

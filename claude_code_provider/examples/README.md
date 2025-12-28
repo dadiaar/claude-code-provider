@@ -56,7 +56,8 @@ python -m claude_code_provider.examples.03_streaming
 |---------|-------------|--------------|
 | `14_retry_resilience.py` | Retry logic and circuit breaker | RetryConfig, CircuitBreaker |
 | `15_advanced_pipeline.py` | Production-grade pipeline | Pool, streaming, progress reporter, multi-model |
-| `16_codebase_reviewer.py` | Full codebase review system | 3So 3i teams, red team, checkpoints, AgentLogger |
+| `16_codebase_reviewer.py` | Full codebase review system | 3So 3i teams, verification team, AgentLogger |
+| `17_opus_codebase_reviewer.py` | Premium Opus version of codebase reviewer | Opus models, higher quality analysis |
 
 ## Learning Path
 

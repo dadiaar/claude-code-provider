@@ -167,6 +167,23 @@ class TestExceptions:
         assert exc.stderr == "error output"
         assert "Test error" in str(exc)
 
+    def test_validation_error_hierarchy(self):
+        """Test ValidationError inherits from ClaudeCodeException (fix for hierarchy break)."""
+        from claude_code_provider._validation import ValidationError
+        from claude_code_provider._exceptions import ClaudeCodeException
+        from agent_framework.exceptions import AgentFrameworkException
+
+        # ValidationError should be catchable as ClaudeCodeException
+        assert issubclass(ValidationError, ClaudeCodeException)
+        assert issubclass(ValidationError, AgentFrameworkException)
+
+        # Test raising and catching
+        try:
+            raise ValidationError("test_param", "test message")
+        except ClaudeCodeException as e:
+            assert "test_param" in str(e)
+            assert "test message" in str(e)
+
 
 class TestMessageConverter:
     """Test message conversion."""
@@ -677,6 +694,35 @@ class TestRetry:
         # Should still succeed despite callback errors
         assert result == "success"
         assert call_count == 3
+
+    @pytest.mark.asyncio
+    async def test_retry_async_callback_support(self):
+        """Test that async callbacks are properly awaited (fix for async callback limitation)."""
+        from claude_code_provider._retry import retry_async, RetryConfig
+
+        call_count = 0
+        callback_results = []
+
+        async def flaky_func():
+            nonlocal call_count
+            call_count += 1
+            if call_count < 3:
+                raise ConnectionError("Test error")
+            return "success"
+
+        async def async_callback(attempt, exc):
+            # Simulate async operation
+            await asyncio.sleep(0.001)
+            callback_results.append(f"attempt_{attempt}")
+
+        config = RetryConfig(max_retries=3, base_delay=0.01, jitter=False)
+        result = await retry_async(flaky_func, config=config, on_retry=async_callback)
+
+        # Async callback should have been awaited
+        assert result == "success"
+        assert len(callback_results) == 2  # Called for attempts 0 and 1
+        assert "attempt_0" in callback_results
+        assert "attempt_1" in callback_results
 
 
 class TestClaudeAgent:
@@ -2393,6 +2439,35 @@ class TestFeedbackLoopAdvanced:
         deserialized = orchestrator._deserialize_conversation(serialized)
         assert len(deserialized) == 2
         assert deserialized[0].text == "Hello"
+
+    def test_approval_check_word_boundary(self):
+        """Test approval check uses word boundaries (fix for substring matching bug).
+
+        The default approval_check should NOT match:
+        - "disapproved" (contains "approved" as substring)
+        - "unapproved"
+        - "not approved yet" (should match - contains word "approved")
+        """
+        from claude_code_provider import ClaudeCodeClient, FeedbackLoopOrchestrator
+
+        client = ClaudeCodeClient(model="haiku")
+        worker = client.create_agent(name="w", instructions="Work")
+        reviewer = client.create_agent(name="r", instructions="Review")
+
+        orchestrator = FeedbackLoopOrchestrator(worker=worker, reviewer=reviewer)
+        check = orchestrator.approval_check
+
+        # Should NOT match - "approved" is substring of "disapproved"
+        assert check("This is disapproved") is False
+        assert check("DISAPPROVED") is False
+        assert check("unapproved work") is False
+
+        # SHOULD match - "approved" is a complete word
+        assert check("approved") is True
+        assert check("APPROVED") is True
+        assert check("This is approved!") is True
+        assert check("Work approved.") is True
+        assert check("I have approved this") is True
 
 
 # =============================================================================

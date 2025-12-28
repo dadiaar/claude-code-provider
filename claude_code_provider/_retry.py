@@ -112,7 +112,10 @@ async def retry_async(
                 # Wrap callback in try/except to prevent callback errors
                 # from breaking retry logic (fix for #22)
                 try:
-                    on_retry(attempt, e)
+                    result = on_retry(attempt, e)
+                    # Handle async callbacks properly
+                    if asyncio.iscoroutine(result):
+                        await result
                 except Exception as callback_error:
                     logger.warning(
                         f"on_retry callback raised an exception (ignored): {callback_error}"

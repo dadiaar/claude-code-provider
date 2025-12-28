@@ -168,14 +168,18 @@ class ClaudeProcessPool:
         self._next_id = 0
         self._shutting_down = False
 
-        # Register cleanup handlers
+        # Register cleanup handlers, preserving original signal handlers
         atexit.register(self._sync_cleanup)
-        signal.signal(signal.SIGTERM, self._signal_handler)
-        signal.signal(signal.SIGINT, self._signal_handler)
+        self._original_sigterm = signal.signal(signal.SIGTERM, self._signal_handler)
+        self._original_sigint = signal.signal(signal.SIGINT, self._signal_handler)
 
     def _signal_handler(self, signum: int, frame: Any) -> None:
-        """Handle termination signals."""
+        """Handle termination signals with proper chaining."""
         self._sync_cleanup()
+        # Restore and call original handler if it exists
+        original = self._original_sigterm if signum == signal.SIGTERM else self._original_sigint
+        if original and callable(original) and original not in (signal.SIG_DFL, signal.SIG_IGN):
+            original(signum, frame)
         sys.exit(0)
 
     def _sync_cleanup(self) -> None:

@@ -1,73 +1,76 @@
 #!/usr/bin/env python3
 # Copyright (c) 2025. Claude Code Provider for Microsoft Agent Framework.
 
-"""Example 16: Production Codebase Reviewer with Multi-Agent Architecture
+"""Example 17: OPUS Codebase Reviewer - Full Premium Model Orchestra
 
-This is the capstone example demonstrating a production-grade code review system:
-    - 5 Domain Teams (security, API, performance, testing, architecture)
-    - Each domain uses 3So 3i pattern (3 Sonnet agents: analyst, defender, synthesizer)
-    - The DEFENDER role prevents false positives and severity inflation
-    - Evidence validation with Haiku (checks design decision comments)
-    - Per-domain synthesis with Sonnet
-    - VERIFICATION Team (replaces old Red Team) with 3 cells:
-        - Threat Model Analyst: Challenges who controls input
-        - Code Verifier: Reads actual code to verify claims
-        - Severity Calibrator: Ensures accurate severity ratings
-    - Cross-domain merge with Opus (filters out false positives)
-    - Final polish with Sonnet (verifies CRITICAL/HIGH before including)
-    - Confidence scores: VERIFIED / LIKELY / UNVERIFIED
-    - Connection pool with Semaphore(6)
-    - Progress reporting with Haiku
-    - Crash-safe logging with immediate flush
-    - State checkpointing for resume capability
+This is the premium version of example 16, upgrading all models:
+    - Sonnet → Opus (5x more capable, 5x more expensive)
+    - Haiku → Sonnet (3x more capable, 3x more expensive)
 
-Key Anti-Inflation Measures:
-    - Defender role argues AGAINST findings in every debate
-    - Validation phase checks for design decision comments
-    - Verification team challenges threat models and severities
-    - Merger filters out claims marked as false positives
-    - Final QA verifies each CRITICAL/HIGH by reading code
+Model Configuration:
+    - 5 Domain Teams: 3 OPUS agents × 3 iterations each (was: 3 Sonnet)
+    - Evidence validation: 5 SONNET validators (was: 5 Haiku)
+    - Per-domain synthesis: 5 OPUS synthesizers (was: 5 Sonnet)
+    - Verification Team: 3 OPUS teams × 3 iterations each (was: 3 Sonnet)
+    - Cross-domain merge: 1 OPUS (unchanged)
+    - Final polish: 1 OPUS (was: 1 Sonnet)
+    - Progress reporting: 1 SONNET (was: 1 Haiku)
+
+Purpose:
+    Compare accuracy vs example 16 to determine:
+    1. Does Opus produce fewer false positives than Sonnet debate?
+    2. Does the multi-agent pattern add value, or does Opus self-correct?
+    3. Is the 5x cost justified by accuracy gains?
+
+Expected Differences:
+    - Smarter defenders = fewer inflated findings
+    - Better code reading = more accurate verification
+    - Higher quality synthesis = tighter final report
+    - Possibly SHORTER output (Opus is more discerning)
 
 Architecture:
     +-----------------------------------------------------------------------+
-    |  PHASE 1: DOMAIN TEAMS (5 x 3So 3i)                                   |
+    |  PHASE 1: DOMAIN TEAMS (5 x 3Op 3i)                                   |
     |  Security, API, Performance, Testing, Architecture                    |
-    |  -> Each team: 3 Sonnet agents debate for 3 iterations               |
+    |  -> Each team: 3 OPUS agents debate for 3 iterations                 |
     |  -> Connection pool limits concurrency                                |
-    |  -> Haiku reports on each team completion                            |
+    |  -> Sonnet reports on each team completion                           |
     +-----------------------------------------------------------------------+
-    |  PHASE 1.5: EVIDENCE VALIDATION (5 x Haiku)                          |
+    |  PHASE 1.5: EVIDENCE VALIDATION (5 x Sonnet)                         |
     |  Verify file:line references are real                                 |
     +-----------------------------------------------------------------------+
-    |  PHASE 2: PER-DOMAIN SYNTHESIS (5 x Sonnet)                          |
+    |  PHASE 2: PER-DOMAIN SYNTHESIS (5 x Opus)                            |
     |  Create focused summary for each domain                               |
     +-----------------------------------------------------------------------+
-    |  PHASE 3: VERIFICATION TEAM (3 x 3So 3i)                             |
+    |  PHASE 3: VERIFICATION TEAM (3 x 3Op 3i)                             |
     |  Threat Model, Code Verifier, Severity Calibrator                    |
     +-----------------------------------------------------------------------+
     |  PHASE 4: CROSS-DOMAIN MERGE (1 x Opus)                              |
     |  Merge, deduplicate, prioritize all findings                         |
     +-----------------------------------------------------------------------+
-    |  PHASE 5: FINAL POLISH (1 x Sonnet)                                  |
+    |  PHASE 5: FINAL POLISH (1 x Opus)                                    |
     |  QA review and formatting                                             |
     +-----------------------------------------------------------------------+
 
 Run:
-    # Review the claude-code-provider package (default)
-    python -m claude_code_provider.examples.16_codebase_reviewer
+    # From ~/swarm (outside the reviewed repo)
+    python3 17_opus_codebase_reviewer.py
 
     # Review a specific codebase
-    python -m claude_code_provider.examples.16_codebase_reviewer --codebase /path/to/code
+    python3 17_opus_codebase_reviewer.py --codebase /path/to/code
 
     # Resume from last checkpoint
-    python -m claude_code_provider.examples.16_codebase_reviewer --resume
+    python3 17_opus_codebase_reviewer.py --resume
 
 Output:
-    Results are saved to ./results/16_codebase_review/
+    Results are saved to ./results/17_opus_codebase_review/
     - logs/all_calls.jsonl (real-time call log)
     - checkpoints/*.json (phase checkpoints)
     - reports/FINAL_REPORT.md (main output)
     - reports/analysis.md (agent behavior analysis)
+
+Cost Estimate:
+    ~5x more expensive than example 16 (~$25-75 vs ~$5-15)
 """
 
 import asyncio
@@ -557,7 +560,7 @@ Report what just completed, overall progress, and time elapsed. Be factual. No f
 
         try:
             result = subprocess.run(
-                ["claude", "-p", prompt, "--model", "haiku"],
+                ["claude", "-p", prompt, "--model", "sonnet"],  # UPGRADED: was haiku
                 capture_output=True,
                 text=True,
                 timeout=60,
@@ -821,7 +824,7 @@ When the analyst and defender disagree:
 {self.context['base_instructions']}""",
             )
             self.agents.append(
-                LoggedAgent(agent, self.logger, f"{self.name}_{role}", "sonnet")
+                LoggedAgent(agent, self.logger, f"{self.name}_{role}", "opus")  # UPGRADED
             )
 
     async def run(self, initial_prompt: str) -> tuple[str, list[dict]]:
@@ -1017,7 +1020,7 @@ the finding should be marked FALSE_POSITIVE unless there's a clear flaw in the r
 
 Be thorough but fast.""",
         )
-        validator = LoggedAgent(validator_agent, self.logger, f"{domain}_validator", "haiku")
+        validator = LoggedAgent(validator_agent, self.logger, f"{domain}_validator", "sonnet")  # UPGRADED
 
         response = await validator.run(
             f"""Validate and challenge these {domain} findings:
@@ -1072,7 +1075,7 @@ OUTPUT:
 
 Keep it concise. This will be merged with other domains later.""",
         )
-        synthesizer = LoggedAgent(synth_agent, self.logger, f"{domain}_synth", "sonnet")
+        synthesizer = LoggedAgent(synth_agent, self.logger, f"{domain}_synth", "opus")  # UPGRADED
 
         debate_summary = "\n\n".join(
             f"Round {i+1}: {list(r.values())[0][:500]}..."
@@ -1331,7 +1334,7 @@ FINAL CHECKS:
 Remember: A report with FEWER TRUE findings is better than one with FALSE POSITIVES.
 If you find inflated claims during verification, REMOVE THEM.""",
         )
-        qa = LoggedAgent(qa_agent, self.logger, "qa", "sonnet")
+        qa = LoggedAgent(qa_agent, self.logger, "qa", "opus")  # UPGRADED
 
         response = await qa.run(
             f"""Review, verify, and polish this report:
@@ -1433,11 +1436,14 @@ async def main():
     )
     args = parser.parse_args()
 
-    # Initialize clients
+    # Initialize clients - UPGRADED for Example 17:
+    # - What was "sonnet" now uses Opus
+    # - What was "haiku" now uses Sonnet
+    # - Opus stays Opus (merger)
     opus = ClaudeCodeClient(model="opus", timeout=1800.0)
-    sonnet = ClaudeCodeClient(model="sonnet", timeout=1200.0)
-    haiku = ClaudeCodeClient(model="haiku", timeout=600.0)
-    logger = AgentLogger("16_codebase_review", verbose=True)
+    sonnet = ClaudeCodeClient(model="opus", timeout=1800.0)  # UPGRADED: Sonnet → Opus
+    haiku = ClaudeCodeClient(model="sonnet", timeout=1200.0)  # UPGRADED: Haiku → Sonnet
+    logger = AgentLogger("17_opus_codebase_review", verbose=True)
 
     # Initialize global cost tracker
     global _cost_tracker
@@ -1447,16 +1453,20 @@ async def main():
     progress_reporter = ProgressReporter(logger)
 
     print("=" * 70)
-    print("PRODUCTION CODEBASE REVIEWER (v2 - Anti-Inflation)")
+    print("OPUS CODEBASE REVIEWER (Example 17 - Full Premium)")
     print("=" * 70)
     print("""
+MODEL UPGRADES (vs Example 16):
+- Sonnet → Opus (5x capability, 5x cost)
+- Haiku → Sonnet (3x capability, 3x cost)
+
 Architecture:
-- Domain Teams: 5 cells, each 3So 3i (analyst + DEFENDER + synthesizer)
-- Validation: 5x Haiku (checks design decision comments)
-- Synthesis: 5x Sonnet
-- Verification Team: 3 cells (threat model, code verifier, severity calibrator)
-- Merge: 1 Opus (filters out false positives)
-- Polish: 1 Sonnet (final verification with confidence scores)
+- Domain Teams: 5 cells, each 3Op 3i (analyst + DEFENDER + synthesizer) [was: Sonnet]
+- Validation: 5x Sonnet (checks design decision comments) [was: Haiku]
+- Synthesis: 5x Opus [was: Sonnet]
+- Verification Team: 3 cells × 3Op 3i each [was: Sonnet]
+- Merge: 1 Opus (filters out false positives) [unchanged]
+- Polish: 1 Opus (final verification with confidence scores) [was: Sonnet]
 
 Anti-Inflation Measures:
 - DEFENDER role in each team argues AGAINST findings
@@ -1468,9 +1478,11 @@ Anti-Inflation Measures:
 
 Features:
 - Connection pool: Semaphore(6) limits concurrent API calls
-- Progress reporter: Haiku reports on team completion
+- Progress reporter: Sonnet reports on team completion [was: Haiku]
 - Immediate log flush: Crash-safe logging
 - State checkpoints: Resume capability
+
+Estimated cost: ~$25-75 (5x more than Example 16)
 """)
 
     # Target codebase

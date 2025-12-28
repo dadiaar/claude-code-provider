@@ -48,6 +48,7 @@ from collections.abc import Sequence
 import asyncio
 import json
 import os
+import re
 import secrets
 import signal
 import stat
@@ -1437,7 +1438,10 @@ class FeedbackLoopOrchestrator:
         self.reviewer = reviewer
         self.max_iterations = max_iterations
         self.timeout_seconds = timeout_seconds
-        self.approval_check = approval_check or (lambda t: "approved" in t.lower())
+        # Use word boundary to avoid matching "disapproved", "unapproved", etc.
+        self.approval_check = approval_check or (
+            lambda t: bool(re.search(r'\bapproved\b', t.lower()))
+        )
         self.on_interaction = on_interaction
         self.synthesizer = synthesizer
         self.cost_tracker = cost_tracker
