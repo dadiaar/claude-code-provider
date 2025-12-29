@@ -4,8 +4,24 @@ Use Claude Code CLI as a provider for Microsoft Agent Framework (MAF), enabling 
 
 ## Installation
 
+### From PyPI (recommended)
+
 ```bash
-pip install -e ~/claude-code-provider/
+pip install claude-code-provider
+```
+
+### From GitHub
+
+```bash
+pip install git+https://github.com/dadiaar/claude-code-provider.git
+```
+
+### From source (development)
+
+```bash
+git clone https://github.com/dadiaar/claude-code-provider.git
+cd claude-code-provider
+pip install -e .
 ```
 
 **Prerequisites:**
@@ -465,4 +481,4 @@ from claude_code_provider import (
 
 ## License
 
-Proprietary - All Rights Reserved. See LICENSE file.
+MIT License. See [LICENSE](LICENSE) file.
