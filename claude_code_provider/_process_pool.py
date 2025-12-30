@@ -62,6 +62,53 @@ class PersistentProcess:
     last_used: float = field(default_factory=time.time)
     in_use: bool = False
     _lock: asyncio.Lock = field(default_factory=asyncio.Lock)
+    _read_buffer: bytes = field(default=b"", repr=False)
+
+    async def _read_line(self, timeout: float) -> bytes:
+        """Read a line from stdout without size limit.
+
+        Uses chunked reading with internal buffering to handle arbitrarily
+        large lines. This avoids asyncio's default 64KB line limit.
+
+        Args:
+            timeout: Maximum time to wait for a complete line.
+
+        Returns:
+            A complete line including the trailing newline.
+
+        Raises:
+            RuntimeError: If the process closes unexpectedly.
+            asyncio.TimeoutError: If no complete line within timeout.
+        """
+        deadline = time.time() + timeout
+
+        while True:
+            # Check if we already have a complete line in buffer
+            newline_pos = self._read_buffer.find(b'\n')
+            if newline_pos != -1:
+                line = self._read_buffer[:newline_pos + 1]
+                self._read_buffer = self._read_buffer[newline_pos + 1:]
+                return line
+
+            # Calculate remaining timeout
+            remaining = deadline - time.time()
+            if remaining <= 0:
+                raise asyncio.TimeoutError(f"Timeout waiting for line")
+
+            # Read more data (64KB chunks for efficiency)
+            chunk = await asyncio.wait_for(
+                self.proc.stdout.read(65536),
+                timeout=remaining
+            )
+            if not chunk:
+                # Stream ended - return remaining buffer if any
+                if self._read_buffer:
+                    remaining_data = self._read_buffer
+                    self._read_buffer = b""
+                    return remaining_data
+                raise RuntimeError("Process closed unexpectedly")
+
+            self._read_buffer += chunk
 
     async def send_message(self, content: str, timeout: float = 120.0) -> str:
         """Send a message and wait for response.
@@ -90,10 +137,7 @@ class PersistentProcess:
             response_text = ""
             try:
                 while True:
-                    line = await asyncio.wait_for(
-                        self.proc.stdout.readline(),
-                        timeout=timeout
-                    )
+                    line = await self._read_line(timeout)
                     if not line:
                         raise RuntimeError("Process closed unexpectedly")
                     try:
