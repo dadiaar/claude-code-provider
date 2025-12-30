@@ -27,6 +27,7 @@ try:
     from ._settings import ClaudeCodeSettings
     from ._retry import RetryConfig
     from ._agent import ClaudeAgent, DEFAULT_AUTOCOMPACT_THRESHOLD
+    from ._request_logger import RequestLogger
     from ._validation import (
         ValidationError,
         validate_string,
@@ -58,6 +59,7 @@ except ImportError:
     from _settings import ClaudeCodeSettings
     from _retry import RetryConfig
     from _agent import ClaudeAgent, DEFAULT_AUTOCOMPACT_THRESHOLD
+    from _request_logger import RequestLogger
     from _validation import (
         ValidationError,
         validate_string,
@@ -148,6 +150,7 @@ class ClaudeCodeClient(BaseChatClient):
         enable_retries: bool = False,
         enable_circuit_breaker: bool = True,
         settings: ClaudeCodeSettings | None = None,
+        log_file: str | None = None,
         **kwargs: Any,
     ) -> None:
         """Initialize the Claude Code client.
@@ -166,6 +169,9 @@ class ClaudeCodeClient(BaseChatClient):
             enable_retries: Enable automatic retries for transient failures.
             enable_circuit_breaker: Enable circuit breaker pattern for failure protection.
             settings: Pre-configured settings object (overrides other args).
+            log_file: Path to JSONL file for logging all requests/responses.
+                If provided, every agent request will be logged with timestamps,
+                tokens, costs, and full prompts/responses.
             **kwargs: Additional arguments passed to BaseChatClient.
 
         Raises:
@@ -212,6 +218,12 @@ class ClaudeCodeClient(BaseChatClient):
 
         # Track if we're in a context manager
         self._context_entered = False
+
+        # Request logger for tracking all agent interactions
+        self._request_logger: RequestLogger | None = None
+        if log_file:
+            self._request_logger = RequestLogger(log_file)
+            logger.info(f"Request logging enabled: {log_file}")
 
     async def __aenter__(self) -> "ClaudeCodeClient":
         """Enter async context manager.
@@ -355,6 +367,25 @@ class ClaudeCodeClient(BaseChatClient):
         """
         return self._session_id
 
+    @property
+    def request_logger(self) -> RequestLogger | None:
+        """Get the request logger if logging is enabled.
+
+        Returns:
+            The RequestLogger instance or None if logging is disabled.
+        """
+        return self._request_logger
+
+    def get_log_summary(self) -> dict | None:
+        """Get summary of all logged requests.
+
+        Returns:
+            Dictionary with aggregated statistics, or None if logging disabled.
+        """
+        if self._request_logger:
+            return self._request_logger.get_summary()
+        return None
+
     def create_agent(
         self,
         *,
@@ -404,6 +435,7 @@ class ClaudeCodeClient(BaseChatClient):
             autocompact=autocompact,
             autocompact_threshold=autocompact_threshold,
             keep_last_n_messages=keep_last_n_messages,
+            request_logger=self._request_logger,
         )
 
     # =========================================================================

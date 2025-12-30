@@ -34,6 +34,7 @@ try:
     from ._process_pool import ClaudeProcessPool, PersistentProcess
     from ._mcp import MCPServer, MCPTransport, MCPManager, MCPServerInfo
     from ._cost import CostTracker, RequestCost, CostSummary
+    from ._request_logger import RequestLogger, RequestLogEntry
     from ._routing import (
         ModelRouter,
         RoutingStrategy,
@@ -110,6 +111,7 @@ except ImportError:
     from _process_pool import ClaudeProcessPool, PersistentProcess
     from _mcp import MCPServer, MCPTransport, MCPManager, MCPServerInfo
     from _cost import CostTracker, RequestCost, CostSummary
+    from _request_logger import RequestLogger, RequestLogEntry
     from _routing import (
         ModelRouter,
         RoutingStrategy,
@@ -204,6 +206,9 @@ __all__ = [
     "CostTracker",
     "RequestCost",
     "CostSummary",
+    # Request Logging
+    "RequestLogger",
+    "RequestLogEntry",
     # Model Routing
     "ModelRouter",
     "RoutingStrategy",

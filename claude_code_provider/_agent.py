@@ -2,6 +2,7 @@
 
 """Enhanced Agent with compact functionality."""
 
+import time
 from typing import Any, TYPE_CHECKING, Literal
 from dataclasses import dataclass, field
 from collections.abc import AsyncIterable, Callable, Sequence, MutableMapping
@@ -19,6 +20,7 @@ except ImportError:
 
 if TYPE_CHECKING:
     from ._chat_client import ClaudeCodeClient
+    from ._request_logger import RequestLogger
     from mcp.server import Server
 
 
@@ -142,6 +144,7 @@ class ClaudeAgent:
         autocompact: bool = True,  # ON by default to prevent context overflow
         autocompact_threshold: int = DEFAULT_AUTOCOMPACT_THRESHOLD,
         keep_last_n_messages: int = 2,
+        request_logger: "RequestLogger | None" = None,
     ) -> None:
         """Initialize the enhanced agent.
 
@@ -152,12 +155,14 @@ class ClaudeAgent:
                 Defaults to True to prevent context overflow errors.
             autocompact_threshold: Token threshold for autocompact (default: 100,000).
             keep_last_n_messages: Number of recent messages to keep uncompacted.
+            request_logger: Optional RequestLogger for logging all requests.
         """
         self._agent = inner_agent
         self._client = client
         self._autocompact = autocompact
         self._autocompact_threshold = autocompact_threshold
         self._keep_last_n = keep_last_n_messages
+        self._request_logger = request_logger
 
         # Track conversation ourselves since CLI uses session-based memory
         self._messages: list[ConversationMessage] = []
@@ -540,38 +545,72 @@ Output only the summary, no preamble.""",
         # Reviewed: 2025-01 - Not a bug, documented API contract.
         self._messages.append(ConversationMessage(role="user", text=message))
 
-        # Run the inner agent with all parameters
-        response = await self._agent.run(
-            prompt,
-            thread=thread,
-            model_id=model_id,
-            max_tokens=max_tokens,
-            temperature=temperature,
-            top_p=top_p,
-            frequency_penalty=frequency_penalty,
-            presence_penalty=presence_penalty,
-            stop=stop,
-            response_format=response_format,
-            tools=tools,
-            tool_choice=tool_choice,
-            seed=seed,
-            user=user,
-            metadata=metadata,
-            **kwargs,
-        )
+        # Track timing for logging
+        start_time = time.time()
+        error_msg = None
+        success = True
+
+        try:
+            # Run the inner agent with all parameters
+            response = await self._agent.run(
+                prompt,
+                thread=thread,
+                model_id=model_id,
+                max_tokens=max_tokens,
+                temperature=temperature,
+                top_p=top_p,
+                frequency_penalty=frequency_penalty,
+                presence_penalty=presence_penalty,
+                stop=stop,
+                response_format=response_format,
+                tools=tools,
+                tool_choice=tool_choice,
+                seed=seed,
+                user=user,
+                metadata=metadata,
+                **kwargs,
+            )
+        except Exception as e:
+            error_msg = str(e)
+            success = False
+            raise
+        finally:
+            elapsed = time.time() - start_time
 
         # Track assistant response
-        if response.text:
-            self._messages.append(ConversationMessage(role="assistant", text=response.text))
+        response_text = response.text or ""
+        if response_text:
+            self._messages.append(ConversationMessage(role="assistant", text=response_text))
 
-        # Track usage
-        self._usage.total_requests += 1
+        # Extract token counts
+        input_tokens = 0
+        output_tokens = 0
         if hasattr(response, 'usage_details') and response.usage_details:
             ud = response.usage_details
             if hasattr(ud, 'input_token_count'):
-                self._usage.total_input_tokens += ud.input_token_count or 0
+                input_tokens = ud.input_token_count or 0
             if hasattr(ud, 'output_token_count'):
-                self._usage.total_output_tokens += ud.output_token_count or 0
+                output_tokens = ud.output_token_count or 0
+
+        # Track usage
+        self._usage.total_requests += 1
+        self._usage.total_input_tokens += input_tokens
+        self._usage.total_output_tokens += output_tokens
+
+        # Log request if logger is configured
+        if self._request_logger:
+            self._request_logger.log(
+                agent_name=self.name or "unnamed",
+                model=model_id or self._client.model_id or "unknown",
+                prompt=message,
+                response=response_text,
+                prompt_tokens=input_tokens,
+                response_tokens=output_tokens,
+                duration_seconds=elapsed,
+                success=success,
+                error=error_msg,
+                session_id=self._client.current_session_id,
+            )
 
         return response
 
